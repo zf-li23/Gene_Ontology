@@ -1,0 +1,55 @@
+"""Transform raw edge lists into analysis-ready NetworkX graphs."""
+from __future__ import annotations
+
+import logging
+from typing import Tuple
+
+import networkx as nx
+import pandas as pd
+
+LOGGER = logging.getLogger(__name__)
+
+
+def build_graph_from_edgelist(edges: pd.DataFrame, weighted: bool = True) -> nx.Graph:
+    """Create an undirected graph from the provided edge table."""
+    graph = nx.Graph()
+    for _, row in edges.iterrows():
+        attrs = {"weight": float(row["weight"]) if weighted else 1.0}
+        graph.add_edge(row["gene_a"], row["gene_b"], **attrs)
+    LOGGER.info("Graph assembled: %s nodes, %s edges", graph.number_of_nodes(), graph.number_of_edges())
+    return graph
+
+
+def extract_giant_component(graph: nx.Graph) -> nx.Graph:
+    """Return the largest connected component; falls back to original graph when trivial."""
+    if graph.number_of_nodes() == 0:
+        return graph
+    components = list(nx.connected_components(graph))
+    if not components:
+        return graph
+    giant = max(components, key=len)
+    LOGGER.info("Retaining giant component with %s nodes", len(giant))
+    return graph.subgraph(giant).copy()
+
+
+def normalize_weights(graph: nx.Graph) -> nx.Graph:
+    """Scale edge weights into [0, 1] to stabilize downstream algorithms."""
+    weights = [data.get("weight", 1.0) for _, _, data in graph.edges(data=True)]
+    if not weights:
+        return graph
+    w_min, w_max = min(weights), max(weights)
+    if w_max == w_min:
+        LOGGER.info("Weights are constant; skipping normalization")
+        return graph
+    for u, v, data in graph.edges(data=True):
+        data["weight"] = (data.get("weight", 1.0) - w_min) / (w_max - w_min)
+    return graph
+
+
+def prepare_graph(edges: pd.DataFrame, keep_giant_component: bool = True, weighted: bool = True) -> nx.Graph:
+    """High-level convenience wrapper handling graph creation and cleanup."""
+    graph = build_graph_from_edgelist(edges, weighted=weighted)
+    if keep_giant_component:
+        graph = extract_giant_component(graph)
+    graph = normalize_weights(graph)
+    return graph

@@ -1,0 +1,27 @@
+paths:
+  network_edges: data/sample_network_edges.tsv
+  go_annotations: data/sample_go_annotations.tsv
+  output_dir: results
+  figures_dir: results/figures
+
+preprocessing:
+  weighted: true
+  keep_giant_component: true
+
+algorithms:
+  louvain:
+    resolution: 1.0
+    random_state: 42
+  hierarchical:
+    min_size: 3
+    max_depth: 3
+    modularity_threshold: 0.0001
+
+enrichment:
+  fdr_threshold: 0.05
+  min_genes: 2
+  background_strategy: union  # options: union, supplied
+
+visualization:
+  top_terms: 5
+  layout: spring
