@@ -1,5 +1,5 @@
 paths:
-  dataset: sample  # options: sample, ppi, scrin
+  dataset: scrin  # options: sample, ppi, scrin
   datasets:
     sample:
       network_edges: data/sample/sample_network_edges.tsv
