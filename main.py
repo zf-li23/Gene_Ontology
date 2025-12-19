@@ -20,7 +20,6 @@ from src import data_loader
 from src.algorithms.hierarchical_louvain import HierarchicalLouvain, HierarchyNode, flatten_hierarchy
 from src.algorithms.louvain_baseline import run_louvain
 from src import preprocess
-from src import enrichment_analysis
 from src import visualization
 from src import enrichment_runner
 from src.overlap_detector import run_pipeline as run_overlap
@@ -76,12 +75,12 @@ def resolve_dataset_paths(config: Dict, project_root: Path) -> Dict[str, Path]:
         entry = datasets[dataset]
         return {
             "edge_path": project_root / entry["network_edges"],
-            "go_path": project_root / entry["go_annotations"],
+            "go_path": (project_root / entry["go_annotations"]) if entry.get("go_annotations") else None,
         }
     # legacy fallback
     return {
         "edge_path": project_root / paths_cfg["network_edges"],
-        "go_path": project_root / paths_cfg["go_annotations"],
+        "go_path": project_root / paths_cfg.get("go_annotations") if paths_cfg.get("go_annotations") else None,
     }
 
 
@@ -125,10 +124,8 @@ def main() -> None:
 
     edges = data_loader.load_edge_list(chosen_edge, weighted=config["preprocessing"]["weighted"])
 
-    go_annotations = {}
-    has_go = go_path and go_path.exists()
-    if has_go:
-        go_annotations = data_loader.load_go_annotations(go_path)
+    # Note: GO annotation files are no longer used for hypergeometric tests.
+    # Enrichment is performed via gseapy through `enrichment_runner` when enabled in config.
 
     graph = preprocess.prepare_graph(
         edges,
@@ -153,44 +150,83 @@ def main() -> None:
     hierarchy_root = hierarchical.fit(graph)
     hierarchical_comm = hierarchy_to_dict(hierarchy_root)
 
-    # Optional GO downstream; skip if not provided
+    # Optional Enrichr/GSEAPY enrichment for external databases (e.g., KEGG, GO)
     baseline_enrich = {}
     hierarchical_enrich = {}
-    if has_go and go_annotations:
-        background = enrichment_analysis.background_from_strategy(
-            config["enrichment"].get("background_strategy", "union"),
-            graph.nodes(),
-            go_annotations,
-        )
-        baseline_enrich = enrichment_analysis.enrich_all_communities(
-            baseline_comm,
-            background,
-            go_annotations,
-            fdr_threshold=config["enrichment"].get("fdr_threshold", 0.05),
-            min_genes=config["enrichment"].get("min_genes", 2),
-        )
-        hierarchical_enrich = enrichment_analysis.enrich_all_communities(
-            hierarchical_comm,
-            background,
-            go_annotations,
-            fdr_threshold=config["enrichment"].get("fdr_threshold", 0.05),
-            min_genes=config["enrichment"].get("min_genes", 2),
-        )
-        write_enrichment_table(baseline_enrich, run_dir / "baseline_enrichment.csv")
-        write_enrichment_table(hierarchical_enrich, run_dir / "hierarchical_enrichment.csv")
 
-    # Optional Enrichr/GSEAPY enrichment for external databases (e.g., KEGG, GO)
     if config["enrichment"].get("enable_gseapy", False):
         try:
-            enrichr_df = enrichment_runner.enrich_communities(
-                baseline_comm,
+            # Optionally limit the number of communities queried to avoid long waits
+            max_comm = config["enrichment"].get("gseapy_max_communities")
+            def take_top_n_by_size(comm_dict, n=None):
+                if not n:
+                    return comm_dict
+                sizes = {cid: len(members) for cid, members in comm_dict.items()}
+                top = sorted(sizes.items(), key=lambda x: x[1], reverse=True)[:n]
+                return {cid: comm_dict[cid] for cid, _ in top}
+
+            baseline_subset = take_top_n_by_size(baseline_comm, max_comm)
+            hierarchical_subset = take_top_n_by_size(hierarchical_comm, max_comm)
+
+            # baseline
+            enrichr_baseline_df = enrichment_runner.enrich_communities(
+                baseline_subset,
                 gene_sets=config["enrichment"].get("gseapy_gene_sets", []),
                 organism=config["enrichment"].get("gseapy_organism", "Human"),
                 cutoff=config["enrichment"].get("gseapy_cutoff", 0.05),
                 top_terms=config["enrichment"].get("gseapy_top_terms", 10),
                 out_file=run_dir / "enrichr_baseline.csv",
             )
-            if enrichr_df.empty:
+            # hierarchical
+            enrichr_hier_df = enrichment_runner.enrich_communities(
+                hierarchical_subset,
+                gene_sets=config["enrichment"].get("gseapy_gene_sets", []),
+                organism=config["enrichment"].get("gseapy_organism", "Human"),
+                cutoff=config["enrichment"].get("gseapy_cutoff", 0.05),
+                top_terms=config["enrichment"].get("gseapy_top_terms", 10),
+                out_file=run_dir / "enrichr_hierarchical.csv",
+            )
+
+            def df_to_enrich_dict(df, cutoff=None):
+                out = {}
+                if df is None or df.empty:
+                    return out
+                # possible column names for adjusted p-value
+                adj_candidates = ["adjusted_p_value", "Adjusted P-value", "Adjusted Pvalue", "adj_p", "Adj P", "Adjusted P-value "]
+                term_candidates = ["term", "Term"]
+                for cid, group in df.groupby("community_id"):
+                    items = []
+                    for _, row in group.iterrows():
+                        term = None
+                        for tcol in term_candidates:
+                            if tcol in row.index and pd.notna(row.get(tcol)):
+                                term = row.get(tcol)
+                                break
+                        # find adjusted p-value
+                        q_val = None
+                        for acol in adj_candidates:
+                            if acol in row.index and pd.notna(row.get(acol)):
+                                try:
+                                    q_val = float(row.get(acol))
+                                except Exception:
+                                    q_val = None
+                                break
+                        # if cutoff provided, enforce significance threshold
+                        if cutoff is not None:
+                            if q_val is None or q_val > cutoff:
+                                continue
+                        # require a term name
+                        if term is None:
+                            continue
+                        items.append({"term": term, "q_value": q_val if q_val is not None else 1.0})
+                    if items:
+                        out[str(cid)] = items
+                return out
+
+            cutoff_val = config["enrichment"].get("gseapy_cutoff", 0.05)
+            baseline_enrich = df_to_enrich_dict(enrichr_baseline_df, cutoff=cutoff_val)
+            hierarchical_enrich = df_to_enrich_dict(enrichr_hier_df, cutoff=cutoff_val)
+            if not baseline_enrich:
                 LOGGER.info("Enrichr returned no significant terms for baseline communities")
         except ImportError:
             LOGGER.warning("gseapy not installed; skipping Enrichr enrichment")
@@ -209,7 +245,8 @@ def main() -> None:
     # Visualizations per run
     visualization.plot_network(graph, partition, run_dir / "network.png", layout=config["visualization"]["layout"])
     visualization.plot_hierarchy(hierarchy_root, run_dir / "hierarchy.png")
-    if has_go and go_annotations:
+    # Plot enrichment bar if any Enrichr results exist
+    if baseline_enrich:
         visualization.plot_enrichment_bar(
             baseline_enrich,
             run_dir / "enrichment_bar.png",

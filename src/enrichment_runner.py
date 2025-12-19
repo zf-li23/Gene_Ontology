@@ -58,10 +58,55 @@ def enrich_communities(
         if enr is None or not hasattr(enr, "results"):
             continue
         df = enr.results.copy()
-        df.insert(0, "community_id", cid)
-        if top_terms:
-            df = df.sort_values("Adjusted P-value").groupby("Gene_set").head(top_terms)
-        all_rows.append(df)
+
+        # Normalize column names: produce a standardized set of columns
+        def _find_col(df, candidates):
+            for c in candidates:
+                if c in df.columns:
+                    return c
+            # try lower-case match
+            lower_map = {col.lower(): col for col in df.columns}
+            for c in candidates:
+                key = c.lower()
+                if key in lower_map:
+                    return lower_map[key]
+            return None
+
+        term_col = _find_col(df, ["Term", "term"])
+        gene_set_col = _find_col(df, ["Gene_set", "gene_set", "Gene Set"]) or _find_col(df, ["Gene_set"])
+        p_col = _find_col(df, ["P-value", "Pvalue", "pvalue", "P-value "])
+        adjp_col = _find_col(df, ["Adjusted P-value", "Adjusted Pvalue", "adj_p", "Adjusted P-value "])
+        overlap_col = _find_col(df, ["Overlap", "Overlap "])
+        genes_col = _find_col(df, ["Genes", "genes"])
+        combined_col = _find_col(df, ["Combined Score", "CombinedScore", "Combined Score "])
+
+        renamed = pd.DataFrame()
+        renamed["community_id"] = [cid] * len(df)
+        renamed["gene_set"] = df[gene_set_col] if gene_set_col in df.columns else (df[gene_set_col] if gene_set_col else None)
+        renamed["term"] = df[term_col] if term_col in df.columns else df.iloc[:, 0]
+        renamed["p_value"] = df[p_col] if p_col in df.columns else None
+        renamed["adjusted_p_value"] = df[adjp_col] if adjp_col in df.columns else None
+        renamed["overlap"] = df[overlap_col] if overlap_col in df.columns else None
+        renamed["combined_score"] = df[combined_col] if combined_col in df.columns else None
+        if genes_col and genes_col in df.columns:
+            renamed["genes"] = df[genes_col]
+        else:
+            # try to reconstruct genes column from 'Overlap Genes' style columns
+            if "Overlap" in df.columns and "Genes" in df.columns:
+                renamed["genes"] = df.get(genes_col)
+            else:
+                renamed["genes"] = None
+
+        # add community size for downstream filtering/inspection
+        renamed["community_size"] = len(gene_list)
+
+        if top_terms and "adjusted_p_value" in renamed.columns:
+            try:
+                renamed = renamed.sort_values("adjusted_p_value").groupby("gene_set").head(top_terms)
+            except Exception:
+                pass
+
+        all_rows.append(renamed)
     if not all_rows:
         return pd.DataFrame()
     out_df = pd.concat(all_rows, axis=0, ignore_index=True)
