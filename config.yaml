@@ -1,6 +1,15 @@
 paths:
-  network_edges: data/sample_network_edges.tsv
-  go_annotations: data/sample_go_annotations.tsv
+  dataset: sample  # options: sample, ppi, scrin
+  datasets:
+    sample:
+      network_edges: data/sample/sample_network_edges.tsv
+      go_annotations: data/sample/sample_go_annotations.tsv
+    ppi:
+      network_edges: data/PPI/ppi_network_edges.tsv
+      go_annotations: data/PPI/ppi_go_annotations.tsv
+    scrin:
+      network_edges: data/scrin/scrin_edges.tsv
+      go_annotations: data/scrin/scrin_go_annotations.tsv
   output_dir: results
   figures_dir: results/figures
 

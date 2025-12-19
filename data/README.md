@@ -1,8 +1,7 @@
-# Sample Data
+# Data Layout
 
-This directory contains lightweight toy datasets to help you validate the end-to-end intelligent bio-computation pipeline before wiring real databases.
+- `sample/` toy PPI + GO (auto-generated if missing when `paths.dataset=sample`).
+- `PPI/` real protein-protein interactions + GO annotations. Expect TSV edge list (`gene_a gene_b [weight]`).
+- `scrin/` mRNA共定位相互作用数据与对应注释。
 
-- `sample_network_edges.tsv`: Weighted gene-gene interaction list for a yeast-sized toy network.
-- `sample_go_annotations.tsv`: Simplified GO annotations (gene-term-description) covering the same genes.
-
-Feel free to replace these files with real STRING/BioGRID and Gene Ontology dumps. Ensure delimiter consistency (tab) when doing so.
+Update `config.yaml -> paths.datasets` to point to your files when switching datasets.

@@ -35,7 +35,12 @@ pip install networkx numpy numba community pandas pyyaml matplotlib scipy statsm
 ```
 
 ### A) Config-driven pipeline (with GO enrichment)
-Runs on bundled toy data and writes metrics/figures to `results/`:
+Runs on the dataset selected in `config.yaml` (`paths.dataset`). Presets:
+- `sample`: data/sample/*.tsv (auto-generated if missing)
+- `ppi`: data/PPI/ppi_network_edges.tsv, ppi_go_annotations.tsv
+- `scrin`: data/scrin/scrin_edges.tsv, scrin_go_annotations.tsv (mRNA共定位)
+
+Execute and write metrics/figures to `results/`:
 ```
 python main.py
 ```
@@ -50,8 +55,8 @@ python main.py data/sample_network_edges.tsv --threads 8 --prune 0.3 --resolutio
 - Uses isolate-sets for parallel Louvain, edge-centrality seeding, and topology fingerprints (C(k) slope, clustering, modularity).
 
 ## Data Notes
-- Sample files live in `data/`. Replace with real STRING/BioGRID edges and GO tables, then update `config.yaml` paths.
-- `data_loader.ensure_inputs` will synthesize a demo network if inputs are missing to keep the pipeline runnable.
+- Sample files live in `data/sample/`. Real datasets go into `data/PPI/` or `data/scrin/`; update `config.yaml` via the `paths.datasets` map.
+- `data_loader.ensure_inputs` will synthesize a demo network only when `paths.dataset=sample`; for `ppi` or `scrin`, the files must exist.
 
 ## Collaboration (GitHub)
 1) Add remote (once):

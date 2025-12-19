@@ -68,6 +68,23 @@ def write_enrichment_table(results: Dict[str, List[Dict]], output_file: Path) ->
     df.to_csv(output_file, index=False)
 
 
+def resolve_dataset_paths(config: Dict, project_root: Path) -> Dict[str, Path]:
+    paths_cfg = config.get("paths", {})
+    dataset = paths_cfg.get("dataset")
+    datasets = paths_cfg.get("datasets")
+    if dataset and datasets and dataset in datasets:
+        entry = datasets[dataset]
+        return {
+            "edge_path": project_root / entry["network_edges"],
+            "go_path": project_root / entry["go_annotations"],
+        }
+    # legacy fallback
+    return {
+        "edge_path": project_root / paths_cfg["network_edges"],
+        "go_path": project_root / paths_cfg["go_annotations"],
+    }
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Intelligent bio-computation pipeline")
     parser.add_argument("edge_file", nargs="?", help="Optional: run overlapping hierarchical detector on a custom edge list")
@@ -86,14 +103,20 @@ def main() -> None:
     project_root = Path(__file__).resolve().parent
     config = load_config(project_root / "config.yaml")
     paths = config["paths"]
-    edge_path = project_root / paths["network_edges"]
-    go_path = project_root / paths["go_annotations"]
+    dataset_paths = resolve_dataset_paths(config, project_root)
+    edge_path = dataset_paths["edge_path"]
+    go_path = dataset_paths["go_path"]
     output_dir = project_root / paths["output_dir"]
     figures_dir = project_root / paths["figures_dir"]
     output_dir.mkdir(parents=True, exist_ok=True)
     figures_dir.mkdir(parents=True, exist_ok=True)
 
-    data_loader.ensure_inputs(edge_path, go_path)
+    # Only auto-generate demo data when using the sample dataset; otherwise expect files to exist
+    if config.get("paths", {}).get("dataset", "sample") == "sample":
+        data_loader.ensure_inputs(edge_path, go_path)
+    else:
+        if not edge_path.exists() or not go_path.exists():
+            raise FileNotFoundError(f"Expected data files not found: {edge_path} and/or {go_path}")
     edges = data_loader.load_edge_list(edge_path, weighted=config["preprocessing"]["weighted"])
     go_annotations = data_loader.load_go_annotations(go_path)
 
