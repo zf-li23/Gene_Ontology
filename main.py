@@ -22,6 +22,7 @@ from src.algorithms.louvain_baseline import run_louvain
 from src import preprocess
 from src import enrichment_analysis
 from src import visualization
+from src import enrichment_runner
 from src.overlap_detector import run_pipeline as run_overlap
 
 
@@ -153,6 +154,8 @@ def main() -> None:
     hierarchical_comm = hierarchy_to_dict(hierarchy_root)
 
     # Optional GO downstream; skip if not provided
+    baseline_enrich = {}
+    hierarchical_enrich = {}
     if has_go and go_annotations:
         background = enrichment_analysis.background_from_strategy(
             config["enrichment"].get("background_strategy", "union"),
@@ -175,6 +178,24 @@ def main() -> None:
         )
         write_enrichment_table(baseline_enrich, run_dir / "baseline_enrichment.csv")
         write_enrichment_table(hierarchical_enrich, run_dir / "hierarchical_enrichment.csv")
+
+    # Optional Enrichr/GSEAPY enrichment for external databases (e.g., KEGG, GO)
+    if config["enrichment"].get("enable_gseapy", False):
+        try:
+            enrichr_df = enrichment_runner.enrich_communities(
+                baseline_comm,
+                gene_sets=config["enrichment"].get("gseapy_gene_sets", []),
+                organism=config["enrichment"].get("gseapy_organism", "Human"),
+                cutoff=config["enrichment"].get("gseapy_cutoff", 0.05),
+                top_terms=config["enrichment"].get("gseapy_top_terms", 10),
+                out_file=run_dir / "enrichr_baseline.csv",
+            )
+            if enrichr_df.empty:
+                LOGGER.info("Enrichr returned no significant terms for baseline communities")
+        except ImportError:
+            LOGGER.warning("gseapy not installed; skipping Enrichr enrichment")
+        except Exception as exc:  # pragma: no cover - runtime guard
+            LOGGER.warning("Enrichr failed: %s", exc)
 
     # Export community assignments
     pd.DataFrame([

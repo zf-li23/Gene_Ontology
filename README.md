@@ -28,10 +28,9 @@ intelligent_bio_pipeline/
 ```
 
 ## Quickstart
-pip install -r requirements.txt
-Install core deps (example):
+Install all deps:
 ```
-pip install networkx numpy numba community pandas pyyaml matplotlib scipy statsmodels requests
+pip install -r requirements.txt
 ```
 
 ### A) Config-driven pipeline
@@ -44,7 +43,7 @@ Execution (will prompt for edge file; press Enter to accept default):
 ```
 python main.py
 ```
-Outputs go to a per-run folder under `results/<edge_stem>/` containing network/hierarchy PNGs and community CSVs. Enrichment tables are only produced when GO files are present.
+Outputs go to a per-run folder under `results/<edge_stem>/` containing network/hierarchy PNGs and community CSVs. GO enrichment tables are produced when GO files are present. If `enrichment.enable_gseapy` is true and gseapy is installed, Enrichr-based KEGG/GO tables are also written.
 
 ### B) Overlapping hierarchical detector (unsupervised, GO-free)
 Run on a custom edge list (TSV: gene_a gene_b [weight]) and emit JSON to stdout:
@@ -57,6 +56,7 @@ python main.py data/sample_network_edges.tsv --threads 8 --prune 0.3 --resolutio
 ## Data Notes
 - Sample files live in `data/sample/`. Real datasets go into `data/PPI/` or `data/scrin/`; update `config.yaml` via the `paths.datasets` map.
 - For scrin CSVs with `gene_A,gene_B,pvalue,...`, conversion to TSV is automatic (output `<stem>_scrin_edges.tsv`) with weight = `log1p(enrichment_ratio) * -log10(qvalue_BH if available else pvalue)` and clipped to avoid outliers; no GO placeholder is generated.
+- Optional Enrichr: set `enrichment.enable_gseapy: true` in `config.yaml` and install `gseapy`; configure gene sets and organism under `enrichment.gseapy_*`.
 - `data_loader.ensure_inputs` will synthesize a demo network only when `paths.dataset=sample`; for `ppi` or `scrin`, the files must exist.
 
 ## Collaboration (GitHub)

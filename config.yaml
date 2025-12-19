@@ -30,6 +30,15 @@ enrichment:
   fdr_threshold: 0.05
   min_genes: 2
   background_strategy: union  # options: union, supplied
+  enable_gseapy: false
+  gseapy_gene_sets:
+    - KEGG_2021_Human
+    - GO_Biological_Process_2023
+    - GO_Cellular_Component_2023
+    - GO_Molecular_Function_2023
+  gseapy_organism: Human
+  gseapy_cutoff: 0.05
+  gseapy_top_terms: 10
 
 visualization:
   top_terms: 5
