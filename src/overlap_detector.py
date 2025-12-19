@@ -56,7 +56,10 @@ def _mark_isolates(indptr: np.ndarray, indices: np.ndarray) -> np.ndarray:
         for m in members:
             used[m] = 1
         sets.append(members)
-    max_len = max(len(s) for s in sets) if sets else 0
+    max_len = 0
+    for s in sets:
+        if len(s) > max_len:
+            max_len = len(s)
     out = -np.ones((len(sets), max_len), dtype=np.int64)
     for i, s in enumerate(sets):
         for j, node_idx in enumerate(s):
@@ -101,6 +104,19 @@ def parallel_louvain_layer(graph: nx.Graph, isolate_sets: List[Set], threads: in
 
     Complexity: O(m) across subsets; memory O(n).
     """
+    # Fast path for single-thread or tiny inputs to avoid process spawn on import-time asserts
+    if threads <= 1 or len(isolate_sets) <= 1:
+        merged: Dict = {}
+        offset = 0
+        for subset in isolate_sets:
+            sub = graph.subgraph(subset).copy()
+            part = community_louvain.best_partition(
+                sub, weight="weight", resolution=resolution, random_state=random_state
+            )
+            merged.update({n: cid + offset for n, cid in part.items()})
+            offset += max(1, sub.number_of_nodes())
+        return merged
+
     from multiprocessing import Pool
 
     tasks = []
@@ -282,7 +298,17 @@ def topological_validate(graph: nx.Graph, tree: TreeNode) -> Dict[str, float]:
         part_sets = [set(child.members) for child in tree.children]
     else:
         part_sets = [set(tree.members)]
-    modularity = nx.algorithms.community.quality.modularity(graph, part_sets)
+    # Ensure a valid partition (no overlaps) for modularity by greedily assigning each node once
+    disjoint_sets: List[Set] = []
+    assigned: Set = set()
+    for comm in part_sets:
+        pruned = {n for n in comm if n not in assigned}
+        if pruned:
+            disjoint_sets.append(pruned)
+            assigned.update(pruned)
+    if not disjoint_sets:
+        disjoint_sets = [set(graph.nodes())]
+    modularity = nx.algorithms.community.quality.modularity(graph, disjoint_sets)
     return {
         "C(k)_slope": float(slope),
         "avg_clustering": avg_c,

@@ -72,3 +72,4 @@ git push origin main
 ## Performance Tips
 - For ≥10k-node PPIs, use the overlapping detector with `--threads` to parallelize isolate-sets.
 - Ensure `numba` is installed to accelerate isolate-set construction; adjust `--prune` for denser/sparser communities.
+- If you see Numba JIT errors, upgrade it (e.g., `pip install -U numba`) and rerun; the isolate-set kernel avoids generators to stay nopython-safe.
