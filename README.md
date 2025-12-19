@@ -7,7 +7,7 @@ Unsupervised community detection and functional validation on gene/protein inter
 - Preprocessing: weighted graphs, giant-component trimming, weight normalization.
 - Baseline Louvain and hierarchical Louvain (python-louvain).
 - Overlapping, multi-level detector (isolate-partition + parallel Louvain + edge-seeded expansion) with topology self-checks.
-- GO enrichment (hypergeometric + FDR), evaluation metrics, and matplotlib visualizations.
+- GO enrichment (hypergeometric + FDR) and matplotlib visualizations.
 - Config-driven defaults plus CLI mode for custom edge lists.
 
 ## Project Layout
@@ -16,13 +16,12 @@ intelligent_bio_pipeline/
 ├── README.md              # You are here
 ├── config.yaml            # Paths and parameters for the config-driven pipeline
 ├── data/                  # Sample toy PPI and GO files
-├── results/               # Metrics and figures (created at runtime)
+├── results/               # Per-run outputs (PNG + CSV)
 ├── src/
 │   ├── algorithms/        # Louvain baseline + hierarchical wrappers
 │   ├── data_loader.py     # Download/load/generate interaction + GO data
 │   ├── preprocess.py      # Graph assembly and cleanup helpers
 │   ├── enrichment_analysis.py # Hypergeometric + FDR
-│   ├── evaluation.py      # Coverage and GO-consistency metrics
 │   ├── visualization.py   # Network/hierarchy/enrichment plots
 │   └── overlap_detector.py# Overlapping, multi-level detector + topology checks
 └── main.py                # Entry point (config mode or CLI edge-file mode)
