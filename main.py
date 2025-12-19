@@ -1,8 +1,14 @@
-"""End-to-end entry point for the intelligent bio-computation workflow."""
+"""End-to-end entry point for the intelligent bio-computation workflow.
+
+Supports two modes:
+- Default (no CLI edge file): runs the original config-driven pipeline with GO enrichment.
+- CLI edge file provided: runs the unsupervised overlapping hierarchical detector and prints JSON.
+"""
 from __future__ import annotations
 
 import json
 import logging
+import argparse
 from collections import defaultdict
 from pathlib import Path
 from typing import Dict, List
@@ -17,6 +23,7 @@ from src import preprocess
 from src import enrichment_analysis
 from src import evaluation
 from src import visualization
+from src.overlap_detector import run_pipeline as run_overlap
 
 
 LOGGER = logging.getLogger("intelligent_bio")
@@ -62,6 +69,19 @@ def write_enrichment_table(results: Dict[str, List[Dict]], output_file: Path) ->
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser(description="Intelligent bio-computation pipeline")
+    parser.add_argument("edge_file", nargs="?", help="Optional: run overlapping hierarchical detector on a custom edge list")
+    parser.add_argument("--threads", type=int, default=8)
+    parser.add_argument("--prune", type=float, default=0.3)
+    parser.add_argument("--resolution", type=float, default=1.0)
+    args = parser.parse_args()
+
+    if args.edge_file:
+        configure_logging()
+        output = run_overlap(args.edge_file, threads=args.threads, resolution=args.resolution, prune=args.prune)
+        print(json.dumps(output, indent=2))
+        return
+
     configure_logging()
     project_root = Path(__file__).resolve().parent
     config = load_config(project_root / "config.yaml")
