@@ -11,6 +11,7 @@ from typing import Dict, Iterable, List, Optional
 
 import networkx as nx
 import pandas as pd
+import numpy as np
 import requests
 
 LOGGER = logging.getLogger(__name__)
@@ -63,6 +64,28 @@ def load_edge_list(path: Path, weighted: bool = True) -> pd.DataFrame:
     if not weighted:
         df["weight"] = 1.0
     return df[["gene_a", "gene_b", "weight"]]
+
+
+def convert_scrin_csv_to_tsv(csv_path: Path, tsv_path: Optional[Path] = None, pval_col: str = "pvalue") -> Path:
+    """Convert scrin CSV (gene_A,gene_B,pvalue,...) to TSV with weight=-log10(pvalue).
+
+    Does not create GO files; only produces an edge list suitable for downstream steps.
+    """
+    if tsv_path is None:
+        tsv_path = csv_path.with_name("scrin_edges.tsv")
+    df = pd.read_csv(csv_path)
+    required = {"gene_A", "gene_B", pval_col}
+    missing = required - set(df.columns)
+    if missing:
+        raise ValueError(f"scrin CSV missing columns: {missing}")
+    small = 1e-300
+    df = df[["gene_A", "gene_B", pval_col]].copy()
+    df["weight"] = -np.log10(df[pval_col].clip(lower=small))
+    df.rename(columns={"gene_A": "gene_a", "gene_B": "gene_b"}, inplace=True)
+    tsv_path.parent.mkdir(parents=True, exist_ok=True)
+    df[["gene_a", "gene_b", "weight"]].to_csv(tsv_path, sep="\t", index=False)
+    LOGGER.info("Converted scrin CSV -> %s (%s edges)", tsv_path, len(df))
+    return tsv_path
 
 
 def load_go_annotations(path: Path) -> Dict[str, List[str]]:

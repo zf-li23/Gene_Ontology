@@ -93,32 +93,40 @@ def main() -> None:
     parser.add_argument("--resolution", type=float, default=1.0)
     args = parser.parse_args()
 
-    if args.edge_file:
-        configure_logging()
-        output = run_overlap(args.edge_file, threads=args.threads, resolution=args.resolution, prune=args.prune)
-        print(json.dumps(output, indent=2))
-        return
-
     configure_logging()
     project_root = Path(__file__).resolve().parent
     config = load_config(project_root / "config.yaml")
     paths = config["paths"]
     dataset_paths = resolve_dataset_paths(config, project_root)
-    edge_path = dataset_paths["edge_path"]
-    go_path = dataset_paths["go_path"]
-    output_dir = project_root / paths["output_dir"]
-    figures_dir = project_root / paths["figures_dir"]
-    output_dir.mkdir(parents=True, exist_ok=True)
-    figures_dir.mkdir(parents=True, exist_ok=True)
-
-    # Only auto-generate demo data when using the sample dataset; otherwise expect files to exist
-    if config.get("paths", {}).get("dataset", "sample") == "sample":
-        data_loader.ensure_inputs(edge_path, go_path)
+    # interactive edge file choice when not provided via CLI
+    if args.edge_file:
+        chosen_edge = Path(args.edge_file)
     else:
-        if not edge_path.exists() or not go_path.exists():
-            raise FileNotFoundError(f"Expected data files not found: {edge_path} and/or {go_path}")
-    edges = data_loader.load_edge_list(edge_path, weighted=config["preprocessing"]["weighted"])
-    go_annotations = data_loader.load_go_annotations(go_path)
+        default_edge = dataset_paths["edge_path"]
+        user_input = input(f"Edge file path [default: {default_edge}]: ").strip()
+        chosen_edge = Path(user_input) if user_input else default_edge
+
+    # handle scrin CSV -> TSV conversion automatically
+    if chosen_edge.suffix.lower() == ".csv":
+        chosen_edge = data_loader.convert_scrin_csv_to_tsv(chosen_edge)
+
+    go_path = dataset_paths.get("go_path")
+    output_root = project_root / paths["output_dir"]
+    run_dir = output_root / f"run_{chosen_edge.stem}"
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    if not chosen_edge.exists():
+        raise FileNotFoundError(f"Edge file not found: {chosen_edge}")
+    # Only auto-generate demo data when using the sample dataset; otherwise expect files to exist
+    if config.get("paths", {}).get("dataset", "sample") == "sample" and not chosen_edge.exists():
+        data_loader.ensure_inputs(chosen_edge, go_path)
+
+    edges = data_loader.load_edge_list(chosen_edge, weighted=config["preprocessing"]["weighted"])
+
+    go_annotations = {}
+    has_go = go_path and go_path.exists()
+    if has_go:
+        go_annotations = data_loader.load_go_annotations(go_path)
 
     graph = preprocess.prepare_graph(
         edges,
@@ -143,42 +151,48 @@ def main() -> None:
     hierarchy_root = hierarchical.fit(graph)
     hierarchical_comm = hierarchy_to_dict(hierarchy_root)
 
-    background = enrichment_analysis.background_from_strategy(
-        config["enrichment"]["background_strategy"],
-        graph.nodes(),
-        go_annotations,
-    )
-    baseline_enrich = enrichment_analysis.enrich_all_communities(
-        baseline_comm,
-        background,
-        go_annotations,
-        fdr_threshold=config["enrichment"]["fdr_threshold"],
-        min_genes=config["enrichment"]["min_genes"],
-    )
-    hierarchical_enrich = enrichment_analysis.enrich_all_communities(
-        hierarchical_comm,
-        background,
-        go_annotations,
-        fdr_threshold=config["enrichment"]["fdr_threshold"],
-        min_genes=config["enrichment"]["min_genes"],
-    )
+    # Optional GO downstream; skip if not provided
+    if has_go and go_annotations:
+        background = enrichment_analysis.background_from_strategy(
+            config["enrichment"].get("background_strategy", "union"),
+            graph.nodes(),
+            go_annotations,
+        )
+        baseline_enrich = enrichment_analysis.enrich_all_communities(
+            baseline_comm,
+            background,
+            go_annotations,
+            fdr_threshold=config["enrichment"].get("fdr_threshold", 0.05),
+            min_genes=config["enrichment"].get("min_genes", 2),
+        )
+        hierarchical_enrich = enrichment_analysis.enrich_all_communities(
+            hierarchical_comm,
+            background,
+            go_annotations,
+            fdr_threshold=config["enrichment"].get("fdr_threshold", 0.05),
+            min_genes=config["enrichment"].get("min_genes", 2),
+        )
+        write_enrichment_table(baseline_enrich, run_dir / "baseline_enrichment.csv")
+        write_enrichment_table(hierarchical_enrich, run_dir / "hierarchical_enrichment.csv")
 
-    consistency = evaluation.community_consistency(baseline_comm, go_annotations)
-    metrics = evaluation.summarize_metrics(baseline_enrich, consistency)
-    metrics_path = output_dir / "metrics.json"
-    metrics_path.write_text(json.dumps(metrics, indent=2))
-    LOGGER.info("Pipeline metrics: %s", metrics)
+    # Export community assignments
+    pd.DataFrame([
+        {"community_id": cid, "members": " ".join(members)} for cid, members in baseline_comm.items()
+    ]).to_csv(run_dir / "communities_louvain.csv", index=False)
 
-    write_enrichment_table(baseline_enrich, output_dir / "baseline_enrichment.csv")
-    write_enrichment_table(hierarchical_enrich, output_dir / "hierarchical_enrichment.csv")
+    pd.DataFrame([
+        {"community_id": cid, "members": " ".join(members)} for cid, members in hierarchical_comm.items()
+    ]).to_csv(run_dir / "communities_hierarchical.csv", index=False)
 
-    visualization.plot_network(graph, partition, figures_dir / "network.png", layout=config["visualization"]["layout"])
-    visualization.plot_hierarchy(hierarchy_root, figures_dir / "hierarchy.png")
-    visualization.plot_enrichment_bar(
-        baseline_enrich,
-        figures_dir / "enrichment_bar.png",
-        top_n=config["visualization"]["top_terms"],
-    )
+    # Visualizations per run
+    visualization.plot_network(graph, partition, run_dir / "network.png", layout=config["visualization"]["layout"])
+    visualization.plot_hierarchy(hierarchy_root, run_dir / "hierarchy.png")
+    if has_go and go_annotations:
+        visualization.plot_enrichment_bar(
+            baseline_enrich,
+            run_dir / "enrichment_bar.png",
+            top_n=config["visualization"]["top_terms"],
+        )
 
 
 if __name__ == "__main__":
