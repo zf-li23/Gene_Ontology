@@ -29,7 +29,10 @@ LOGGER = logging.getLogger("intelligent_bio")
 
 
 def configure_logging() -> None:
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(name)s | %(message)s")
+    # Keep library logs quiet; provide concise CLI output via prints
+    logging.basicConfig(level=logging.WARNING, format="%(asctime)s | %(levelname)s | %(name)s | %(message)s")
+    logging.getLogger("gseapy").setLevel(logging.WARNING)
+    logging.getLogger("urllib3").setLevel(logging.WARNING)
 
 
 def load_config(config_path: Path) -> Dict:
@@ -87,6 +90,7 @@ def resolve_dataset_paths(config: Dict, project_root: Path) -> Dict[str, Path]:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Intelligent bio-computation pipeline")
     parser.add_argument("edge_file", nargs="?", help="Optional: run overlapping hierarchical detector on a custom edge list")
+    parser.add_argument("--organism", choices=["human", "mouse", "skip"], help="Optional: non-interactive organism choice for enrichment")
     parser.add_argument("--threads", type=int, default=8)
     parser.add_argument("--prune", type=float, default=0.3)
     parser.add_argument("--resolution", type=float, default=1.0)
@@ -156,36 +160,52 @@ def main() -> None:
 
     if config["enrichment"].get("enable_gseapy", False):
         try:
-            # Optionally limit the number of communities queried to avoid long waits
-            max_comm = config["enrichment"].get("gseapy_max_communities")
-            def take_top_n_by_size(comm_dict, n=None):
-                if not n:
-                    return comm_dict
-                sizes = {cid: len(members) for cid, members in comm_dict.items()}
-                top = sorted(sizes.items(), key=lambda x: x[1], reverse=True)[:n]
-                return {cid: comm_dict[cid] for cid, _ in top}
+            # Prompt user for organism choice (Human or Mouse) for enrichment
+            print(f"Detected {len(baseline_comm)} baseline communities and {len(hierarchical_comm)} hierarchical communities.")
+            import sys
+            # Determine choice: CLI flag > interactive prompt > config default
+            if args.organism:
+                choice = args.organism[0]
+            else:
+                if sys.stdin.isatty():
+                    choice = input("Run enrichment for Human (h), Mouse (m), or skip (s) [h/m/s, default h]: ").strip().lower()
+                else:
+                    # non-interactive: use config default organism
+                    default_org = config.get("enrichment", {}).get("gseapy_organism", "Human")
+                    choice = default_org[0].lower() if default_org else "h"
+            if choice == "m" or choice == "mouse":
+                organism = "Mouse"
+                gene_sets = [gs for gs in config["enrichment"].get("gseapy_gene_sets", []) if "Mouse" in gs or gs.startswith("GO_")]
+            elif choice == "s":
+                organism = None
+                gene_sets = []
+            else:
+                organism = "Human"
+                gene_sets = [gs for gs in config["enrichment"].get("gseapy_gene_sets", []) if "Human" in gs or gs.startswith("GO_")]
 
-            baseline_subset = take_top_n_by_size(baseline_comm, max_comm)
-            hierarchical_subset = take_top_n_by_size(hierarchical_comm, max_comm)
-
-            # baseline
-            enrichr_baseline_df = enrichment_runner.enrich_communities(
-                baseline_subset,
-                gene_sets=config["enrichment"].get("gseapy_gene_sets", []),
-                organism=config["enrichment"].get("gseapy_organism", "Human"),
-                cutoff=config["enrichment"].get("gseapy_cutoff", 0.05),
-                top_terms=config["enrichment"].get("gseapy_top_terms", 10),
-                out_file=run_dir / "enrichr_baseline.csv",
-            )
-            # hierarchical
-            enrichr_hier_df = enrichment_runner.enrich_communities(
-                hierarchical_subset,
-                gene_sets=config["enrichment"].get("gseapy_gene_sets", []),
-                organism=config["enrichment"].get("gseapy_organism", "Human"),
-                cutoff=config["enrichment"].get("gseapy_cutoff", 0.05),
-                top_terms=config["enrichment"].get("gseapy_top_terms", 10),
-                out_file=run_dir / "enrichr_hierarchical.csv",
-            )
+            if not organism:
+                print("Skipping gseapy enrichment as requested.")
+            else:
+                print(f"Running enrichment for organism: {organism}. Gene sets: {gene_sets}")
+                # Run enrichment on all communities (no hard limit); enrichment_runner shows per-community progress
+                enrichr_baseline_df = enrichment_runner.enrich_communities(
+                    baseline_comm,
+                    gene_sets=gene_sets,
+                    organism=organism,
+                    cutoff=config["enrichment"].get("gseapy_cutoff", 0.05),
+                    top_terms=config["enrichment"].get("gseapy_top_terms", 10),
+                    out_file=run_dir / "enrichr_baseline.csv",
+                    out_dir=run_dir / "per_community_enrich" / "baseline",
+                )
+                enrichr_hier_df = enrichment_runner.enrich_communities(
+                    hierarchical_comm,
+                    gene_sets=gene_sets,
+                    organism=organism,
+                    cutoff=config["enrichment"].get("gseapy_cutoff", 0.05),
+                    top_terms=config["enrichment"].get("gseapy_top_terms", 10),
+                    out_file=run_dir / "enrichr_hierarchical.csv",
+                    out_dir=run_dir / "per_community_enrich" / "hierarchical",
+                )
 
             def df_to_enrich_dict(df, cutoff=None):
                 out = {}
@@ -228,6 +248,32 @@ def main() -> None:
             hierarchical_enrich = df_to_enrich_dict(enrichr_hier_df, cutoff=cutoff_val)
             if not baseline_enrich:
                 LOGGER.info("Enrichr returned no significant terms for baseline communities")
+
+            # Ensure per-community CSVs exist (some runs may skip writing them inside runner)
+            def _write_per_comm(df, subdir_name: str):
+                if df is None or df.empty:
+                    return
+                outp = run_dir / "per_community_enrich" / subdir_name
+                outp.mkdir(parents=True, exist_ok=True)
+                for cid, group in df.groupby("community_id"):
+                    group.to_csv(outp / f"{cid}_enrich.csv", index=False)
+
+            try:
+                _write_per_comm(enrichr_baseline_df, "baseline")
+                _write_per_comm(enrichr_hier_df, "hierarchical")
+            except Exception:
+                pass
+
+            # Summarize across communities (aggregate p-values) and write summary CSVs
+            try:
+                summary_base = enrichment_runner.summarize_enrichment(enrichr_baseline_df)
+                if not summary_base.empty:
+                    summary_base.to_csv(run_dir / "enrichment_summary_baseline.csv", index=False)
+                summary_hier = enrichment_runner.summarize_enrichment(enrichr_hier_df)
+                if not summary_hier.empty:
+                    summary_hier.to_csv(run_dir / "enrichment_summary_hierarchical.csv", index=False)
+            except Exception as exc:
+                LOGGER.warning("Failed to create enrichment summary: %s", exc)
         except ImportError:
             LOGGER.warning("gseapy not installed; skipping Enrichr enrichment")
         except Exception as exc:  # pragma: no cover - runtime guard

@@ -26,11 +26,14 @@ enrichment:
   background_strategy: union  # options: union, supplied
   enable_gseapy: true
   gseapy_gene_sets:
+    - GO_Biological_Process_2025
+    - GO_Cellular_Component_2025
+    - GO_Molecular_Function_2025
+    - KEGG_2019_Mouse
     - KEGG_2021_Human
   gseapy_organism: Human
   gseapy_cutoff: 0.05
   gseapy_top_terms: 5
-  gseapy_max_communities: 5
 
 visualization:
   top_terms: 5
