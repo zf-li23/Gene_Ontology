@@ -6,6 +6,8 @@ from pathlib import Path
 from typing import Dict, List
 
 import matplotlib.pyplot as plt
+import matplotlib.cm as cm
+import matplotlib.colors as mcolors
 import networkx as nx
 import numpy as np
 
@@ -20,8 +22,22 @@ COLORS = [
 ]
 
 
+def _scale(values, vmin=None, vmax=None):
+    arr = np.array(list(values), dtype=float)
+    if arr.size == 0:
+        return arr
+    if vmin is None:
+        vmin = np.percentile(arr, 5)
+    if vmax is None:
+        vmax = np.percentile(arr, 95)
+    if vmax == vmin:
+        vmax = vmin + 1e-9
+    arr = np.clip(arr, vmin, vmax)
+    return (arr - vmin) / (vmax - vmin)
+
+
 def plot_network(graph: nx.Graph, partition: Dict[str, int], output_path: Path, layout: str = "spring") -> None:
-    """Draw the interaction network with community colors."""
+    """Draw the interaction network with improved aesthetics (scaled sizes/colors)."""
     if graph.number_of_nodes() == 0:
         LOGGER.warning("Graph empty; skipping network plot")
         return
@@ -31,25 +47,43 @@ def plot_network(graph: nx.Graph, partition: Dict[str, int], output_path: Path, 
     else:
         pos = nx.kamada_kawai_layout(graph, weight="weight")
     communities = partition or {node: 0 for node in graph.nodes()}
-    colors = [COLORS[communities.get(node, 0) % len(COLORS)] for node in graph.nodes()]
-    plt.figure(figsize=(8, 6))
-    nx.draw_networkx(
+    comm_ids = np.array([communities.get(node, 0) for node in graph.nodes()])
+    cmap = cm.get_cmap("tab20")
+    node_colors = [cmap(c % cmap.N) for c in comm_ids]
+
+    degrees = dict(graph.degree(weight="weight"))
+    node_sizes = 200 * (_scale(degrees.values()) + 0.2)
+
+    weights = [data.get("weight", 1.0) for _, _, data in graph.edges(data=True)]
+    edge_widths = 1.0 + 2.5 * _scale(weights)
+    edge_alphas = 0.2 + 0.5 * _scale(weights)
+
+    plt.figure(figsize=(9, 7))
+    nx.draw_networkx_edges(
         graph,
         pos=pos,
-        node_color=colors,
-        with_labels=False,
-        node_size=120,
-        width=0.8,
-        edge_color="#C0C0C0",
+        width=edge_widths,
+        alpha=edge_alphas,
+        edge_color="#7f7f7f",
     )
-    plt.title("Gene interaction network with Louvain communities")
+    nx.draw_networkx_nodes(
+        graph,
+        pos=pos,
+        node_color=node_colors,
+        node_size=node_sizes,
+        linewidths=0.3,
+        edgecolors="#222222",
+        alpha=0.9,
+    )
+    plt.title("Interaction network with community colors", fontsize=12)
+    plt.axis("off")
     plt.tight_layout()
     plt.savefig(output_path, dpi=300)
     plt.close()
 
 
 def plot_hierarchy(root: HierarchyNode, output_path: Path) -> None:
-    """Visualize the hierarchy as a tree plot."""
+    """Visualize the hierarchy as a tree plot with better spacing."""
     if not root.members:
         LOGGER.warning("Hierarchy empty; skipping plot")
         return
@@ -70,8 +104,20 @@ def plot_hierarchy(root: HierarchyNode, output_path: Path) -> None:
     except (ImportError, nx.NetworkXException):  # pragma: no cover - graceful fallback
         LOGGER.warning("graphviz_layout unavailable; falling back to spring layout")
         pos = nx.spring_layout(tree)
-    plt.figure(figsize=(8, 6))
-    nx.draw(tree, pos, with_labels=True, arrows=False, node_size=3000, font_size=8)
+    depths = nx.get_node_attributes(tree, "depth")
+    depth_vals = [depths.get(n, 0) for n in tree.nodes()]
+    node_sizes = 800 + 200 * np.array(depth_vals)
+    plt.figure(figsize=(9, 7))
+    nx.draw(
+        tree,
+        pos,
+        with_labels=True,
+        arrows=False,
+        node_size=node_sizes,
+        font_size=8,
+        node_color=[COLORS[d % len(COLORS)] for d in depth_vals],
+        edge_color="#888888",
+    )
     plt.title("Hierarchical community tree")
     plt.tight_layout()
     plt.savefig(output_path, dpi=300)

@@ -39,7 +39,7 @@ pip install networkx numpy numba community pandas pyyaml matplotlib scipy statsm
 Runs on the dataset selected in `config.yaml` (`paths.dataset`). Presets:
 - `sample`: data/sample/*.tsv (auto-generated if missing)
 - `ppi`: data/PPI/ppi_network_edges.tsv, ppi_go_annotations.tsv
-- `scrin`: data/scrin/scrin_edges.tsv (or the original CSV; auto-converted with weight=-log10(pvalue))
+- `scrin`: data/scrin/scrin_edges.tsv (or the original CSV; auto-converted with weight = log1p(enrichment_ratio) * -log10(qvalue/pvalue))
 
 Execution (will prompt for edge file; press Enter to accept default):
 ```
@@ -57,7 +57,7 @@ python main.py data/sample_network_edges.tsv --threads 8 --prune 0.3 --resolutio
 
 ## Data Notes
 - Sample files live in `data/sample/`. Real datasets go into `data/PPI/` or `data/scrin/`; update `config.yaml` via the `paths.datasets` map.
-- For scrin CSVs with `gene_A,gene_B,pvalue,...`, conversion to TSV is automatic with weight = `-log10(pvalue)`; no GO placeholder is generated.
+- For scrin CSVs with `gene_A,gene_B,pvalue,...`, conversion to TSV is automatic with weight = `log1p(enrichment_ratio) * -log10(qvalue_BH if available else pvalue)` and clipped to avoid outliers; no GO placeholder is generated.
 - `data_loader.ensure_inputs` will synthesize a demo network only when `paths.dataset=sample`; for `ppi` or `scrin`, the files must exist.
 
 ## Collaboration (GitHub)

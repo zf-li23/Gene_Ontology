@@ -66,10 +66,14 @@ def load_edge_list(path: Path, weighted: bool = True) -> pd.DataFrame:
     return df[["gene_a", "gene_b", "weight"]]
 
 
-def convert_scrin_csv_to_tsv(csv_path: Path, tsv_path: Optional[Path] = None, pval_col: str = "pvalue") -> Path:
-    """Convert scrin CSV (gene_A,gene_B,pvalue,...) to TSV with weight=-log10(pvalue).
+def convert_scrin_csv_to_tsv(csv_path: Path, tsv_path: Optional[Path] = None,
+                             pval_col: str = "pvalue", qval_col: str = "qvalue_BH",
+                             enrich_col: str = "enrichment_ratio") -> Path:
+    """Convert scrin CSV (gene_A,gene_B,...) to TSV with a more robust weight.
 
-    Does not create GO files; only produces an edge list suitable for downstream steps.
+    Weight strategy (bounded, positive):
+    w = log1p(enrichment_ratio_if_available) * (-log10(qvalue_BH_if_available else pvalue))
+    Values are clipped to reasonable ranges to avoid exploding weights.
     """
     if tsv_path is None:
         tsv_path = csv_path.with_name("scrin_edges.tsv")
@@ -78,13 +82,33 @@ def convert_scrin_csv_to_tsv(csv_path: Path, tsv_path: Optional[Path] = None, pv
     missing = required - set(df.columns)
     if missing:
         raise ValueError(f"scrin CSV missing columns: {missing}")
+
     small = 1e-300
-    df = df[["gene_A", "gene_B", pval_col]].copy()
-    df["weight"] = -np.log10(df[pval_col].clip(lower=small))
-    df.rename(columns={"gene_A": "gene_a", "gene_B": "gene_b"}, inplace=True)
+    # choose significance source: prefer qvalue if present
+    if qval_col in df.columns:
+        sig = df[qval_col].clip(lower=small)
+    else:
+        sig = df[pval_col].clip(lower=small)
+    log_sig = -np.log10(sig)
+
+    # effect size: enrichment_ratio when available; otherwise 1
+    if enrich_col in df.columns:
+        effect = np.log1p(df[enrich_col].clip(lower=0))
+    else:
+        effect = 1.0
+
+    weight = (log_sig * effect).astype(float)
+    # clip to prevent extreme outliers
+    weight = np.clip(weight, 0, np.quantile(weight, 0.999))
+
+    df_out = pd.DataFrame({
+        "gene_a": df["gene_A"],
+        "gene_b": df["gene_B"],
+        "weight": weight,
+    })
     tsv_path.parent.mkdir(parents=True, exist_ok=True)
-    df[["gene_a", "gene_b", "weight"]].to_csv(tsv_path, sep="\t", index=False)
-    LOGGER.info("Converted scrin CSV -> %s (%s edges)", tsv_path, len(df))
+    df_out.to_csv(tsv_path, sep="\t", index=False)
+    LOGGER.info("Converted scrin CSV -> %s (%s edges)", tsv_path, len(df_out))
     return tsv_path
 
 
