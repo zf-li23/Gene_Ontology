@@ -19,7 +19,14 @@ Unsupervised community detection and functional validation on gene/protein inter
 - 基于 `gseapy` / Enrichr 的 GO / KEGG 富集（支持本地 GMT）
 - 每次运行会在 `results/<edge_stem>/` 产出表格、图像，并生成交互式 HTML 报告用于算法评价
 
-下面是从刚 clone 仓库到查看报告的手把手说明（假设你已经 cd 到 `intelligent_bio_pipeline` 目录）：
+下面是从 GitHub 克隆仓库并查看报告的使用说明（在终端中运行）：
+
+```bash
+git clone https://github.com/zf-li23/Gene_Ontology.git
+cd Gene_Ontology
+```
+
+然后按照以下步骤操作：
 
 ## 1) 创建 & 激活 Python 环境（推荐 conda）
 
@@ -147,7 +154,3 @@ pip install gseapy
 ```
 
 - 若需要把报告打包为单文件（内嵌图片与 CSV），或需要自定义前端展示（更多统计图），我可以帮你生成自包含 HTML 或改进前端脚本。
-
----
-
-如需我替你把当前 `results/<stem>/` 打包为单个 HTML 或 ZIP，或把 README 翻译成英文版，告诉我即可。祝使用顺利！
