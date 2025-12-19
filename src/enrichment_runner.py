@@ -14,6 +14,7 @@ import requests
 from pathlib import Path
 from typing import Union
 from scipy.stats import combine_pvalues
+import numpy as np
 import contextlib
 import os
 
@@ -51,15 +52,13 @@ def enrich_communities(
     require_gseapy()
     all_rows: List[pd.DataFrame] = []
     # try to use tqdm for progress if available
-    if disable_progress:
-        iterator = communities.items()
-    else:
-        try:
-            from tqdm import tqdm
+    # Always try to show a tqdm progress bar when available (even for local GMTs)
+    try:
+        from tqdm import tqdm
 
-            iterator = tqdm(communities.items(), desc="Enrichr communities")
-        except Exception:
-            iterator = communities.items()
+        iterator = tqdm(communities.items(), desc="Enrichr communities")
+    except Exception:
+        iterator = communities.items()
 
     # Optionally silence noisy gseapy logger output (useful for local GMTs)
     gseapy_logger = logging.getLogger("gseapy")
@@ -282,4 +281,82 @@ def summarize_enrichment(df: pd.DataFrame, method: str = "fisher") -> pd.DataFra
     out = pd.DataFrame(records)
     if not out.empty:
         out = out.sort_values("combined_pvalue")
+    return out
+
+
+def compute_concordance_scores(df: pd.DataFrame, communities: Dict[str, List[str]], cutoff: float = 0.05) -> pd.DataFrame:
+    """Compute concordance metrics between detected communities and gene-set libraries.
+
+    Returns a DataFrame with per-gene_set metrics plus an overall row where gene_set==None.
+
+    Metrics:
+    - n_terms: number of (term,community) observations
+    - n_significant_communities: number of communities with at least one term with adjusted p < cutoff
+    - frac_significant_communities: fraction of communities with at least one significant term
+    - mean_score: mean per-community score s_c where s_c = max(0, -log10(min_q))
+    - normalized_score: mean_score divided by -log10(cutoff) (range ~0..1)
+    - weighted_score: community-size-weighted mean_score
+    """
+    if df is None or df.empty:
+        return pd.DataFrame()
+
+    # identify p-value column (prefer adjusted_p_value)
+    pcol = None
+    for cand in ["adjusted_p_value", "Adjusted P-value", "p_value", "P-value"]:
+        if cand in df.columns:
+            pcol = cand
+            break
+    if pcol is None:
+        raise ValueError("No p-value column found for concordance scoring")
+
+    # ensure community list includes all communities
+    all_communities = list(communities.keys())
+    comm_sizes = {k: len(v) for k, v in communities.items()}
+
+    records = []
+    gene_sets = df["gene_set"].dropna().unique().tolist() if "gene_set" in df.columns else [None]
+    # compute for each gene_set separately, and overall combined
+    def _compute(subdf, label):
+        # per-community min p
+        grouped = subdf.groupby("community_id")[pcol].min()
+        scores = {}
+        for cid in all_communities:
+            min_p = None
+            if cid in grouped.index:
+                try:
+                    min_p = float(grouped.loc[cid])
+                except Exception:
+                    min_p = None
+            if min_p is None or np.isnan(min_p):
+                s = 0.0
+            else:
+                s = max(0.0, -np.log10(min_p))
+            scores[cid] = s
+        mean_score = float(np.mean(list(scores.values()))) if scores else 0.0
+        denom = -np.log10(cutoff) if cutoff and cutoff > 0 else 1.0
+        normalized = float(mean_score / denom) if denom else mean_score
+        # fraction of communities with at least one significant hit
+        n_sig = sum(1 for v in scores.values() if v > 0 and (10 ** (-v)) < cutoff)
+        frac_sig = n_sig / max(1, len(all_communities))
+        # weighted by community size
+        weights = np.array([comm_sizes.get(cid, 1) for cid in all_communities], dtype=float)
+        vals = np.array([scores.get(cid, 0.0) for cid in all_communities], dtype=float)
+        weighted_score = float(np.average(vals, weights=weights)) if weights.sum() > 0 else mean_score
+        return {
+            "gene_set": label,
+            "n_terms": int(len(subdf)),
+            "n_significant_communities": int(n_sig),
+            "frac_significant_communities": float(frac_sig),
+            "mean_score": float(mean_score),
+            "normalized_score": float(normalized),
+            "weighted_score": float(weighted_score),
+        }
+
+    for gs in gene_sets:
+        sub = df[df["gene_set"] == gs] if gs is not None else df
+        records.append(_compute(sub, gs))
+
+    # overall
+    records.append(_compute(df, None))
+    out = pd.DataFrame(records)
     return out

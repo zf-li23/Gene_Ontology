@@ -18,6 +18,7 @@ import pandas as pd
 import yaml
 
 from src import data_loader
+import re
 from src.algorithms.hierarchical_louvain import HierarchicalLouvain, HierarchyNode, flatten_hierarchy
 from src.algorithms.louvain_baseline import run_louvain
 from src import preprocess
@@ -180,15 +181,21 @@ def main() -> None:
                     # non-interactive: use config default organism
                     default_org = config.get("enrichment", {}).get("gseapy_organism", "Human")
                     choice = default_org[0].lower() if default_org else "h"
+            # Always include GO gene sets (by basename starting with 'GO_'),
+            # and include the organism-specific KEGG file depending on choice.
+            available_sets = config["enrichment"].get("gseapy_gene_sets", [])
+            go_sets = [gs for gs in available_sets if Path(gs).name.startswith("GO_")]
             if choice == "m" or choice == "mouse":
                 organism = "Mouse"
-                gene_sets = [gs for gs in config["enrichment"].get("gseapy_gene_sets", []) if "Mouse" in gs or gs.startswith("GO_")]
+                kegg_sets = [gs for gs in available_sets if "KEGG" in Path(gs).name and "Mouse" in Path(gs).name]
             elif choice == "s":
                 organism = None
-                gene_sets = []
+                kegg_sets = []
             else:
                 organism = "Human"
-                gene_sets = [gs for gs in config["enrichment"].get("gseapy_gene_sets", []) if "Human" in gs or gs.startswith("GO_")]
+                kegg_sets = [gs for gs in available_sets if "KEGG" in Path(gs).name and ("Human" in Path(gs).name or "Homo" in Path(gs).name)]
+            # Combine GO sets + organism-specific KEGGs
+            gene_sets = go_sets + kegg_sets
 
             if not organism:
                 print("Skipping gseapy enrichment as requested.")
@@ -285,6 +292,23 @@ def main() -> None:
                 summary_hier = enrichment_runner.summarize_enrichment(enrichr_hier_df)
                 if not summary_hier.empty:
                     summary_hier.to_csv(run_dir / "enrichment_summary_hierarchical.csv", index=False)
+                # Compute concordance / evaluation scores comparing communities vs gene-sets
+                try:
+                    concord_base = enrichment_runner.compute_concordance_scores(enrichr_baseline_df, baseline_comm, cutoff=cutoff_val)
+                    if not concord_base.empty:
+                        concord_base.to_csv(run_dir / "enrichment_concordance_baseline.csv", index=False)
+                    concord_hier = enrichment_runner.compute_concordance_scores(enrichr_hier_df, hierarchical_comm, cutoff=cutoff_val)
+                    if not concord_hier.empty:
+                        concord_hier.to_csv(run_dir / "enrichment_concordance_hierarchical.csv", index=False)
+                    # Print brief summary
+                    if not concord_base.empty:
+                        overall = concord_base[concord_base["gene_set"].isna()].iloc[0]
+                        print(f"Baseline concordance normalized score: {overall['normalized_score']:.3f}, frac significant communities: {overall['frac_significant_communities']:.3f}")
+                    if not concord_hier.empty:
+                        overall_h = concord_hier[concord_hier["gene_set"].isna()].iloc[0]
+                        print(f"Hierarchical concordance normalized score: {overall_h['normalized_score']:.3f}, frac significant communities: {overall_h['frac_significant_communities']:.3f}")
+                except Exception as exc:
+                    LOGGER.warning("Failed to compute concordance scores: %s", exc)
             except Exception as exc:
                 LOGGER.warning("Failed to create enrichment summary: %s", exc)
         except ImportError:
@@ -311,6 +335,48 @@ def main() -> None:
             run_dir / "enrichment_bar.png",
             top_n=config["visualization"]["top_terms"],
         )
+
+        # Generate HTML report from template file (results/report_template.html)
+        def _write_html_report(run_dir: Path):
+                rep_path = run_dir / "report.html"
+                per_base = run_dir / "per_community_enrich" / "baseline"
+                per_hier = run_dir / "per_community_enrich" / "hierarchical"
+
+                def _list_csv(folder: Path):
+                    if not folder.exists():
+                        return []
+                    names = [p.name for p in folder.glob("*_enrich.csv")]
+                    # natural sort by extracting integer components (e.g., L10 before L2 handled correctly)
+                    def keyfn(name: str):
+                        nums = re.findall(r"\d+", name)
+                        if nums:
+                            return tuple(int(x) for x in nums)
+                        return (name,)
+                    return sorted(names, key=keyfn)
+
+                baseline_files = _list_csv(per_base)
+                hier_files = _list_csv(per_hier)
+
+                # read template from repository results/ folder
+                tpl_path = project_root / "results" / "report_template.html"
+                try:
+                        tpl = tpl_path.read_text()
+                except Exception:
+                        LOGGER.warning("Report template not found (%s); skipping HTML report", tpl_path)
+                        return
+
+                import json
+                baseline_json = json.dumps(baseline_files)
+                hier_json = json.dumps(hier_files)
+                html = tpl.replace('__BASELINE__', baseline_json).replace('__HIER__', hier_json).replace('__RUNNAME__', run_dir.name)
+
+                try:
+                        with open(rep_path, 'w') as fh:
+                                fh.write(html)
+                except Exception:
+                        LOGGER.warning('Failed to write HTML report: %s', rep_path)
+
+        _write_html_report(run_dir)
 
 
 if __name__ == "__main__":
