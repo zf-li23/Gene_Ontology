@@ -1,0 +1,11 @@
+networkx
+numpy
+numba
+python-louvain
+pandas
+pyyaml
+matplotlib
+scipy
+statsmodels
+requests
+pydot

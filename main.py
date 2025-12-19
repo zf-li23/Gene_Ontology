@@ -21,7 +21,6 @@ from src.algorithms.hierarchical_louvain import HierarchicalLouvain, HierarchyNo
 from src.algorithms.louvain_baseline import run_louvain
 from src import preprocess
 from src import enrichment_analysis
-from src import evaluation
 from src import visualization
 from src.overlap_detector import run_pipeline as run_overlap
 
@@ -106,13 +105,15 @@ def main() -> None:
         user_input = input(f"Edge file path [default: {default_edge}]: ").strip()
         chosen_edge = Path(user_input) if user_input else default_edge
 
+    base_stem = chosen_edge.stem
     # handle scrin CSV -> TSV conversion automatically
     if chosen_edge.suffix.lower() == ".csv":
+        base_stem = chosen_edge.stem  # keep original stem for naming outputs
         chosen_edge = data_loader.convert_scrin_csv_to_tsv(chosen_edge)
 
     go_path = dataset_paths.get("go_path")
     output_root = project_root / paths["output_dir"]
-    run_dir = output_root / f"run_{chosen_edge.stem}"
+    run_dir = output_root / base_stem
     run_dir.mkdir(parents=True, exist_ok=True)
 
     if not chosen_edge.exists():

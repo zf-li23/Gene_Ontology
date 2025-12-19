@@ -76,7 +76,7 @@ def convert_scrin_csv_to_tsv(csv_path: Path, tsv_path: Optional[Path] = None,
     Values are clipped to reasonable ranges to avoid exploding weights.
     """
     if tsv_path is None:
-        tsv_path = csv_path.with_name("scrin_edges.tsv")
+        tsv_path = csv_path.with_name(f"{csv_path.stem}_scrin_edges.tsv")
     df = pd.read_csv(csv_path)
     required = {"gene_A", "gene_B", pval_col}
     missing = required - set(df.columns)

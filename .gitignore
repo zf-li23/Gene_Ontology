@@ -11,3 +11,4 @@ results/figures/*.png
 results/
 data/
 src/__pycache__/
+src/algorithms/__pycache__/
