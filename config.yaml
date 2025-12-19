@@ -26,11 +26,11 @@ enrichment:
   background_strategy: union  # options: union, supplied
   enable_gseapy: true
   gseapy_gene_sets:
-    - GO_Biological_Process_2025
-    - GO_Cellular_Component_2025
-    - GO_Molecular_Function_2025
-    - KEGG_2019_Mouse
-    - KEGG_2021_Human
+    - data/gmt/GO_Biological_Process_2025.gmt
+    - data/gmt/GO_Cellular_Component_2025.gmt
+    - data/gmt/GO_Molecular_Function_2025.gmt
+    - data/gmt/KEGG_2019_Mouse.gmt
+    - data/gmt/KEGG_2021_Human.gmt
   gseapy_organism: Human
   gseapy_cutoff: 0.05
   gseapy_top_terms: 5

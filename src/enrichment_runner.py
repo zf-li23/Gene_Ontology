@@ -14,6 +14,8 @@ import requests
 from pathlib import Path
 from typing import Union
 from scipy.stats import combine_pvalues
+import contextlib
+import os
 
 try:
     import gseapy as gp
@@ -39,6 +41,8 @@ def enrich_communities(
     top_terms: int = 10,
     out_file: Optional[Path] = None,
     out_dir: Optional[Path] = None,
+    disable_progress: bool = False,
+    silence_gseapy: bool = False,
 ) -> pd.DataFrame:
     """Run Enrichr on each community and return a concatenated DataFrame.
 
@@ -47,11 +51,25 @@ def enrich_communities(
     require_gseapy()
     all_rows: List[pd.DataFrame] = []
     # try to use tqdm for progress if available
-    try:
-        from tqdm import tqdm
-        iterator = tqdm(communities.items(), desc="Enrichr communities")
-    except Exception:
+    if disable_progress:
         iterator = communities.items()
+    else:
+        try:
+            from tqdm import tqdm
+
+            iterator = tqdm(communities.items(), desc="Enrichr communities")
+        except Exception:
+            iterator = communities.items()
+
+    # Optionally silence noisy gseapy logger output (useful for local GMTs)
+    gseapy_logger = logging.getLogger("gseapy")
+    old_level = None
+    if silence_gseapy:
+        try:
+            old_level = gseapy_logger.level
+            gseapy_logger.setLevel(logging.CRITICAL)
+        except Exception:
+            old_level = None
 
     for cid, genes in iterator:
         gene_list = list(dict.fromkeys(genes))
@@ -65,19 +83,45 @@ def enrich_communities(
                     message=".*DataFrame concatenation with empty or all-NA entries is deprecated.*",
                     category=FutureWarning,
                 )
-                enr = gp.enrichr(
-                    gene_list=gene_list,
-                    gene_sets=gene_sets,
-                    organism=organism,
-                    outdir=None,
-                    cutoff=cutoff,
-                )
+                # gp.enrichr may emit logs/prints even when logging level is adjusted; when requested,
+                # redirect stderr to suppress noisy messages coming from gseapy internals.
+                if silence_gseapy:
+                    with contextlib.redirect_stderr(open(os.devnull, "w")):
+                        enr = gp.enrichr(
+                            gene_list=gene_list,
+                            gene_sets=gene_sets,
+                            organism=organism,
+                            outdir=None,
+                            cutoff=cutoff,
+                        )
+                else:
+                    enr = gp.enrichr(
+                        gene_list=gene_list,
+                        gene_sets=gene_sets,
+                        organism=organism,
+                        outdir=None,
+                        cutoff=cutoff,
+                    )
         except Exception as exc:  # pragma: no cover - runtime safety
             LOGGER.warning("Enrichr failed for %s: %s", cid, exc)
             continue
         if enr is None or not hasattr(enr, "results"):
             continue
-        df = enr.results.copy()
+        # `enr.results` can be a DataFrame, a list of dicts, or other types depending on gseapy usage
+        res = enr.results
+        if isinstance(res, pd.DataFrame):
+            df = res.copy()
+        else:
+            try:
+                df = pd.DataFrame(res)
+            except Exception:
+                LOGGER.warning("Unrecognized enrichr results format for %s; skipping", cid)
+                continue
+
+        # skip empty results
+        if df is None or (hasattr(df, "empty") and df.empty):
+            LOGGER.info("No enrichment results for %s; skipping", cid)
+            continue
 
         # Normalize column names: produce a standardized set of columns
         def _find_col(df, candidates):
@@ -103,7 +147,15 @@ def enrich_communities(
         renamed = pd.DataFrame()
         renamed["community_id"] = [cid] * len(df)
         renamed["gene_set"] = df[gene_set_col] if gene_set_col in df.columns else (df[gene_set_col] if gene_set_col else None)
-        renamed["term"] = df[term_col] if term_col in df.columns else df.iloc[:, 0]
+        if term_col in df.columns:
+            renamed["term"] = df[term_col]
+        else:
+            # fallback: use first column if available, otherwise skip this community
+            if df.shape[1] > 0:
+                renamed["term"] = df.iloc[:, 0]
+            else:
+                LOGGER.warning("No term column available for %s; skipping", cid)
+                continue
         renamed["p_value"] = df[p_col] if p_col in df.columns else None
         renamed["adjusted_p_value"] = df[adjp_col] if adjp_col in df.columns else None
         renamed["overlap"] = df[overlap_col] if overlap_col in df.columns else None
@@ -137,6 +189,12 @@ def enrich_communities(
 
         all_rows.append(renamed)
     if not all_rows:
+        # restore gseapy logger level
+        if silence_gseapy and old_level is not None:
+            try:
+                gseapy_logger.setLevel(old_level)
+            except Exception:
+                pass
         return pd.DataFrame()
     out_df = pd.concat(all_rows, axis=0, ignore_index=True)
     if out_file is not None:
@@ -149,6 +207,12 @@ def enrich_communities(
         for cid, group in out_df.groupby("community_id"):
             path = out_dir / f"{cid}_enrich.csv"
             group.to_csv(path, index=False)
+    # restore gseapy logger level
+    if silence_gseapy and old_level is not None:
+        try:
+            gseapy_logger.setLevel(old_level)
+        except Exception:
+            pass
     return out_df
 
 

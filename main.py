@@ -12,6 +12,7 @@ import argparse
 from collections import defaultdict
 from pathlib import Path
 from typing import Dict, List
+import shutil
 
 import pandas as pd
 import yaml
@@ -118,6 +119,12 @@ def main() -> None:
     go_path = dataset_paths.get("go_path")
     output_root = project_root / paths["output_dir"]
     run_dir = output_root / base_stem
+    # If a previous run directory exists, remove it to ensure clean outputs for this run
+    if run_dir.exists():
+        try:
+            shutil.rmtree(run_dir)
+        except Exception:
+            LOGGER.warning("Failed to remove existing run directory: %s", run_dir)
     run_dir.mkdir(parents=True, exist_ok=True)
 
     if not chosen_edge.exists():
@@ -188,6 +195,8 @@ def main() -> None:
             else:
                 print(f"Running enrichment for organism: {organism}. Gene sets: {gene_sets}")
                 # Run enrichment on all communities (no hard limit); enrichment_runner shows per-community progress
+                # detect whether gene sets refer to local GMT files -> disable progress and silence noisy gseapy logs
+                local_gmt = any(Path(gs).exists() for gs in gene_sets)
                 enrichr_baseline_df = enrichment_runner.enrich_communities(
                     baseline_comm,
                     gene_sets=gene_sets,
@@ -196,6 +205,8 @@ def main() -> None:
                     top_terms=config["enrichment"].get("gseapy_top_terms", 10),
                     out_file=run_dir / "enrichr_baseline.csv",
                     out_dir=run_dir / "per_community_enrich" / "baseline",
+                    disable_progress=local_gmt,
+                    silence_gseapy=local_gmt,
                 )
                 enrichr_hier_df = enrichment_runner.enrich_communities(
                     hierarchical_comm,
@@ -205,6 +216,8 @@ def main() -> None:
                     top_terms=config["enrichment"].get("gseapy_top_terms", 10),
                     out_file=run_dir / "enrichr_hierarchical.csv",
                     out_dir=run_dir / "per_community_enrich" / "hierarchical",
+                    disable_progress=local_gmt,
+                    silence_gseapy=local_gmt,
                 )
 
             def df_to_enrich_dict(df, cutoff=None):

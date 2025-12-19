@@ -10,6 +10,7 @@ import matplotlib.cm as cm
 import matplotlib.colors as mcolors
 import networkx as nx
 import numpy as np
+import warnings
 
 from .algorithms.hierarchical_louvain import HierarchyNode
 
@@ -102,7 +103,7 @@ def plot_hierarchy(root: HierarchyNode, output_path: Path) -> None:
     try:
         pos = nx.nx_pydot.graphviz_layout(tree, prog="dot") if tree.number_of_nodes() < 200 else nx.spring_layout(tree)
     except (ImportError, nx.NetworkXException):  # pragma: no cover - graceful fallback
-        LOGGER.warning("graphviz_layout unavailable; falling back to spring layout")
+        LOGGER.debug("graphviz_layout unavailable; falling back to spring layout")
         pos = nx.spring_layout(tree)
     depths = nx.get_node_attributes(tree, "depth")
     depth_vals = [depths.get(n, 0) for n in tree.nodes()]
@@ -119,7 +120,12 @@ def plot_hierarchy(root: HierarchyNode, output_path: Path) -> None:
         edge_color="#888888",
     )
     plt.title("Hierarchical community tree")
-    plt.tight_layout()
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", message=".*tight_layout.*", category=UserWarning)
+        try:
+            plt.tight_layout()
+        except Exception:
+            pass
     plt.savefig(output_path, dpi=300)
     plt.close()
 
@@ -146,6 +152,11 @@ def plot_enrichment_bar(enrichment_results: Dict[str, List[Dict]], output_path: 
     plt.barh(labels, scores, color="#2ca02c")
     plt.xlabel("-log10(q-value)")
     plt.title("Top enriched GO terms")
-    plt.tight_layout()
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", message=".*tight_layout.*", category=UserWarning)
+        try:
+            plt.tight_layout()
+        except Exception:
+            pass
     plt.savefig(output_path, dpi=300)
     plt.close()
