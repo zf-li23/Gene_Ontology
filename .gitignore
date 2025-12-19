@@ -10,3 +10,4 @@ results/*.csv
 results/figures/*.png
 results/
 data/
+src/__pycache__/
