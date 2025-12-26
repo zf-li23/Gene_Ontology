@@ -92,7 +92,6 @@ def resolve_dataset_paths(config: Dict, project_root: Path) -> Dict[str, Path]:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Intelligent bio-computation pipeline")
     parser.add_argument("edge_file", nargs="?", help="Optional: run overlapping hierarchical detector on a custom edge list")
-    parser.add_argument("--downstream", action="store_true", help="Analyze CSV outputs in data/downstream and generate evaluations")
     parser.add_argument("--dataset", choices=["sample", "scrin", "ppi"], help="Optional: dataset type to override config (sample/scrin/ppi)")
     parser.add_argument("--id-map", help="Optional TSV mapping file with columns 'source_id\tgene_symbol' to translate PPI IDs to gene symbols for enrichment")
     parser.add_argument("--organism", choices=["human", "mouse", "skip"], help="Optional: non-interactive organism choice for enrichment")
@@ -109,96 +108,6 @@ def main() -> None:
         config.setdefault("paths", {})["dataset"] = args.dataset
     paths = config["paths"]
     dataset_paths = resolve_dataset_paths(config, project_root)
-    downstream_dir = project_root / "data" / "downstream"
-    # If downstream mode requested, handle it immediately (avoid prompting for edge file)
-    if args.downstream:
-        output_root = project_root / paths["output_dir"]
-        summary_records = []
-        if not downstream_dir.exists():
-            raise FileNotFoundError(f"Downstream directory not found: {downstream_dir}")
-        print(f"Running downstream evaluations for files in {downstream_dir}", flush=True)
-        for csvf in sorted(downstream_dir.glob("*.csv")):
-            try:
-                print(f"Processing downstream file: {csvf.name}", flush=True)
-                df_out = pd.read_csv(csvf)
-                if "community_id" not in df_out.columns or "members" not in df_out.columns:
-                    LOGGER.warning("Skipping %s: missing required columns 'community_id' and 'members'", csvf)
-                    continue
-                comms = {}
-                for _, row in df_out.iterrows():
-                    cid = str(row["community_id"])
-                    mems = str(row["members"]).strip()
-                    if "\t" in mems:
-                        parts = mems.split("\t")
-                    elif ";" in mems:
-                        parts = [x.strip() for x in mems.split(";") if x.strip()]
-                    else:
-                        parts = [x for x in mems.split() if x]
-                    comms[cid] = parts
-
-                ds_out = output_root / "downstream" / csvf.stem
-                ds_out.mkdir(parents=True, exist_ok=True)
-
-                stats = {
-                    "file": csvf.name,
-                    "n_communities": len(comms),
-                    "mean_community_size": float(pd.Series([len(v) for v in comms.values()]).mean() if comms else 0.0),
-                }
-
-                if config["enrichment"].get("enable_gseapy", False):
-                    available_sets = config["enrichment"].get("gseapy_gene_sets", [])
-                    go_sets = [gs for gs in available_sets if Path(gs).name.startswith("GO_")]
-                    default_org = config.get("enrichment", {}).get("gseapy_organism", "Human")
-                    organism = default_org
-                    gene_sets = go_sets + [gs for gs in available_sets if "KEGG" in Path(gs).name and (organism in Path(gs).name or organism == "Human")]
-                    print(f"Running enrichment for downstream file {csvf.name} (organism={organism})", flush=True)
-                    enrich_df = enrichment_runner.enrich_communities(
-                        comms,
-                        gene_sets=gene_sets,
-                        organism=organism,
-                        cutoff=config["enrichment"].get("gseapy_cutoff", 0.05),
-                        top_terms=config["enrichment"].get("gseapy_top_terms", 10),
-                        out_file=ds_out / "enrichr_all.csv",
-                        out_dir=ds_out / "per_community_enrich",
-                        disable_progress=True,
-                        silence_gseapy=True,
-                    )
-                    try:
-                        summ = enrichment_runner.summarize_enrichment(enrich_df)
-                        if not summ.empty:
-                            summ.to_csv(ds_out / "enrichment_summary.csv", index=False)
-                        concord = enrichment_runner.compute_concordance_scores(enrich_df, comms, cutoff=config["enrichment"].get("gseapy_cutoff", 0.05))
-                        if not concord.empty:
-                            concord.to_csv(ds_out / "enrichment_concordance.csv", index=False)
-                            # find overall row where gene_set is NA
-                            if "gene_set" in concord.columns:
-                                overall = concord[concord["gene_set"].isna()]
-                            else:
-                                overall = concord.tail(1)
-                            if not overall.empty:
-                                orow = overall.iloc[0]
-                                stats.update({
-                                    "normalized_score": float(orow.get("normalized_score", float("nan"))),
-                                    "frac_significant_communities": float(orow.get("frac_significant_communities", float("nan"))),
-                                    "mean_score": float(orow.get("mean_score", float("nan"))),
-                                    "weighted_score": float(orow.get("weighted_score", float("nan"))),
-                                })
-                    except Exception as exc:
-                        LOGGER.warning("Downstream enrichment summarization failed for %s: %s", csvf, exc)
-                else:
-                    print("Enrichment disabled in config; skipping enrichment for downstream files", flush=True)
-
-                pd.DataFrame([stats]).to_csv(ds_out / "summary_stats.csv", index=False)
-                summary_records.append(stats)
-            except Exception as exc:
-                LOGGER.warning("Failed to process downstream file %s: %s", csvf, exc)
-        # write comparison summary for all downstream files
-        if summary_records:
-            comp_out = output_root / "downstream" / "summary_comparison.csv"
-            pd.DataFrame(summary_records).to_csv(comp_out, index=False)
-            print(f"Wrote downstream comparison summary: {comp_out}", flush=True)
-        print("Downstream evaluations complete", flush=True)
-        return
     # interactive edge file choice when not provided via CLI
     if args.edge_file:
         chosen_edge = Path(args.edge_file)
@@ -259,88 +168,19 @@ def main() -> None:
     # Note: GO annotation files are no longer used for hypergeometric tests.
     # Enrichment is performed via gseapy through `enrichment_runner` when enabled in config.
 
-    # If downstream mode requested, process all CSV outputs in data/downstream
-    if args.downstream:
-        if not downstream_dir.exists():
-            raise FileNotFoundError(f"Downstream directory not found: {downstream_dir}")
-        print(f"Running downstream evaluations for files in {downstream_dir}", flush=True)
-        for csvf in sorted(downstream_dir.glob("*.csv")):
-            try:
-                print(f"Processing downstream file: {csvf.name}", flush=True)
-                df_out = pd.read_csv(csvf)
-                # Expect columns: community_id, members (space-separated or semicolon/comma)
-                if "community_id" not in df_out.columns or "members" not in df_out.columns:
-                    LOGGER.warning("Skipping %s: missing required columns 'community_id' and 'members'", csvf)
-                    continue
-                comms = {}
-                for _, row in df_out.iterrows():
-                    cid = str(row["community_id"])
-                    mems = str(row["members"]).strip()
-                    # support different separators
-                    if "\t" in mems:
-                        parts = mems.split("\t")
-                    elif ";" in mems:
-                        parts = [x.strip() for x in mems.split(";") if x.strip()]
-                    else:
-                        parts = [x for x in mems.split() if x]
-                    comms[cid] = parts
+    # NOTE: algorithm integration will be invoked below as part of the standard run.
 
-                # prepare per-file output dir
-                ds_out = output_root / "downstream" / csvf.stem
-                ds_out.mkdir(parents=True, exist_ok=True)
-
-                # basic stats
-                stats = {
-                    "file": csvf.name,
-                    "n_communities": len(comms),
-                    "mean_community_size": float(pd.Series([len(v) for v in comms.values()]).mean() if comms else 0.0),
-                }
-                pd.DataFrame([stats]).to_csv(ds_out / "summary_stats.csv", index=False)
-
-                # If enrichment enabled, run enrichment and summarize
-                if config["enrichment"].get("enable_gseapy", False):
-                    # choose gene sets as in normal flow
-                    available_sets = config["enrichment"].get("gseapy_gene_sets", [])
-                    go_sets = [gs for gs in available_sets if Path(gs).name.startswith("GO_")]
-                    # select organism default
-                    default_org = config.get("enrichment", {}).get("gseapy_organism", "Human")
-                    organism = default_org
-                    gene_sets = go_sets + [gs for gs in available_sets if "KEGG" in Path(gs).name and (organism in Path(gs).name or organism == "Human")]
-                    print(f"Running enrichment for downstream file {csvf.name} (organism={organism})", flush=True)
-                    enrich_df = enrichment_runner.enrich_communities(
-                        comms,
-                        gene_sets=gene_sets,
-                        organism=organism,
-                        cutoff=config["enrichment"].get("gseapy_cutoff", 0.05),
-                        top_terms=config["enrichment"].get("gseapy_top_terms", 10),
-                        out_file=ds_out / "enrichr_all.csv",
-                        out_dir=ds_out / "per_community_enrich",
-                        disable_progress=True,
-                        silence_gseapy=True,
-                    )
-                    # write summary and concordance if possible
-                    try:
-                        summ = enrichment_runner.summarize_enrichment(enrich_df)
-                        if not summ.empty:
-                            summ.to_csv(ds_out / "enrichment_summary.csv", index=False)
-                        concord = enrichment_runner.compute_concordance_scores(enrich_df, comms, cutoff=config["enrichment"].get("gseapy_cutoff", 0.05))
-                        if not concord.empty:
-                            concord.to_csv(ds_out / "enrichment_concordance.csv", index=False)
-                    except Exception as exc:
-                        LOGGER.warning("Downstream enrichment summarization failed for %s: %s", csvf, exc)
-                else:
-                    print("Enrichment disabled in config; skipping enrichment for downstream files", flush=True)
-            except Exception as exc:
-                LOGGER.warning("Failed to process downstream file %s: %s", csvf, exc)
-        print("Downstream evaluations complete", flush=True)
-        return
-
+    # Prepare graph once for all algorithms
     graph = preprocess.prepare_graph(
         edges,
         keep_giant_component=config["preprocessing"]["keep_giant_component"],
         weighted=config["preprocessing"]["weighted"],
     )
     print(f"Prepared graph: {graph.number_of_nodes()} nodes, {graph.number_of_edges()} edges", flush=True)
+
+    # Graph is already prepared above
+
+
 
     partition = run_louvain(
         graph,
@@ -360,6 +200,28 @@ def main() -> None:
     hierarchy_root = hierarchical.fit(graph)
     print("Hierarchical detection complete", flush=True)
     hierarchical_comm = hierarchy_to_dict(hierarchy_root)
+
+    # Run other algorithms
+    other_results = {}
+    try:
+        from src.algorithms.algorithm_div import run_algorithm_div
+        from src.algorithms.algorithm2 import run_algorithm2
+        from src.algorithms.algorithm3 import run_algorithm3
+        
+        # Div variants
+        div_res = run_algorithm_div(graph)
+        for name, part in div_res.items():
+            # Convert partition to dict
+            other_results[name] = partition_to_dict(part, prefix=f"{name}_")
+            
+        # Algo 2
+        other_results["algorithm2"] = run_algorithm2(graph)
+        
+        # Algo 3
+        other_results["algorithm3"] = run_algorithm3(graph)
+        
+    except Exception as e:
+        LOGGER.warning(f"Failed to run other algorithms: {e}")
 
     # Optional Enrichr/GSEAPY enrichment for external databases (e.g., KEGG, GO)
     baseline_enrich = {}
@@ -403,30 +265,52 @@ def main() -> None:
                 # Run enrichment on all communities (no hard limit); enrichment_runner shows per-community progress
                 # detect whether gene sets refer to local GMT files -> disable progress and silence noisy gseapy logs
                 local_gmt = any(Path(gs).exists() for gs in gene_sets)
-                enrichr_baseline_df = enrichment_runner.enrich_communities(
-                    baseline_comm,
-                    gene_sets=gene_sets,
-                    organism=organism,
-                    cutoff=config["enrichment"].get("gseapy_cutoff", 0.05),
-                    top_terms=config["enrichment"].get("gseapy_top_terms", 10),
-                    out_file=run_dir / "enrichr_baseline.csv",
-                    out_dir=run_dir / "per_community_enrich" / "baseline",
-                    disable_progress=local_gmt,
-                    silence_gseapy=local_gmt,
-                )
-                enrichr_hier_df = enrichment_runner.enrich_communities(
-                    hierarchical_comm,
-                    gene_sets=gene_sets,
-                    organism=organism,
-                    cutoff=config["enrichment"].get("gseapy_cutoff", 0.05),
-                    top_terms=config["enrichment"].get("gseapy_top_terms", 10),
-                    out_file=run_dir / "enrichr_hierarchical.csv",
-                    out_dir=run_dir / "per_community_enrich" / "hierarchical",
-                    disable_progress=local_gmt,
-                    silence_gseapy=local_gmt,
-                )
+                
+                # Helper to run enrichment and save results
+                def _process_enrichment(name, comms):
+                    print(f"Enriching {name} ({len(comms)} communities)...")
+                    df = enrichment_runner.enrich_communities(
+                        comms,
+                        gene_sets=gene_sets,
+                        organism=organism,
+                        cutoff=config["enrichment"].get("gseapy_cutoff", 0.05),
+                        top_terms=config["enrichment"].get("gseapy_top_terms", 10),
+                        out_file=run_dir / f"enrichr_{name}.csv",
+                        out_dir=run_dir / "per_community_enrich" / name,
+                        disable_progress=local_gmt,
+                        silence_gseapy=local_gmt,
+                    )
+                    
+                    # Summarize
+                    try:
+                        summ = enrichment_runner.summarize_enrichment(df)
+                        if not summ.empty:
+                            summ.to_csv(run_dir / f"enrichment_summary_{name}.csv", index=False)
+                        concord = enrichment_runner.compute_concordance_scores(df, comms, cutoff=config["enrichment"].get("gseapy_cutoff", 0.05))
+                        if not concord.empty:
+                            concord.to_csv(run_dir / f"enrichment_concordance_{name}.csv", index=False)
+                            overall = concord[concord["gene_set"].isna()]
+                            if not overall.empty:
+                                row = overall.iloc[0]
+                                print(f"{name} concordance normalized score: {row['normalized_score']:.3f}, frac significant: {row['frac_significant_communities']:.3f}")
+                    except Exception as e:
+                        LOGGER.warning(f"Failed summary for {name}: {e}")
+                    
+                    return df
+
+                # Collect all algorithms
+                all_algorithms = {
+                    "baseline": baseline_comm,
+                    "hierarchical": hierarchical_comm,
+                    **other_results
+                }
+
+                enrichment_results = {}
+                for name, comms in all_algorithms.items():
+                    enrichment_results[name] = _process_enrichment(name, comms)
 
             def df_to_enrich_dict(df, cutoff=None):
+
                 out = {}
                 if df is None or df.empty:
                     return out
@@ -463,53 +347,9 @@ def main() -> None:
                 return out
 
             cutoff_val = config["enrichment"].get("gseapy_cutoff", 0.05)
-            baseline_enrich = df_to_enrich_dict(enrichr_baseline_df, cutoff=cutoff_val)
-            hierarchical_enrich = df_to_enrich_dict(enrichr_hier_df, cutoff=cutoff_val)
-            if not baseline_enrich:
-                LOGGER.info("Enrichr returned no significant terms for baseline communities")
-
-            # Ensure per-community CSVs exist (some runs may skip writing them inside runner)
-            def _write_per_comm(df, subdir_name: str):
-                if df is None or df.empty:
-                    return
-                outp = run_dir / "per_community_enrich" / subdir_name
-                outp.mkdir(parents=True, exist_ok=True)
-                for cid, group in df.groupby("community_id"):
-                    group.to_csv(outp / f"{cid}_enrich.csv", index=False)
-
-            try:
-                _write_per_comm(enrichr_baseline_df, "baseline")
-                _write_per_comm(enrichr_hier_df, "hierarchical")
-            except Exception:
-                pass
-
-            # Summarize across communities (aggregate p-values) and write summary CSVs
-            try:
-                summary_base = enrichment_runner.summarize_enrichment(enrichr_baseline_df)
-                if not summary_base.empty:
-                    summary_base.to_csv(run_dir / "enrichment_summary_baseline.csv", index=False)
-                summary_hier = enrichment_runner.summarize_enrichment(enrichr_hier_df)
-                if not summary_hier.empty:
-                    summary_hier.to_csv(run_dir / "enrichment_summary_hierarchical.csv", index=False)
-                # Compute concordance / evaluation scores comparing communities vs gene-sets
-                try:
-                    concord_base = enrichment_runner.compute_concordance_scores(enrichr_baseline_df, baseline_comm, cutoff=cutoff_val)
-                    if not concord_base.empty:
-                        concord_base.to_csv(run_dir / "enrichment_concordance_baseline.csv", index=False)
-                    concord_hier = enrichment_runner.compute_concordance_scores(enrichr_hier_df, hierarchical_comm, cutoff=cutoff_val)
-                    if not concord_hier.empty:
-                        concord_hier.to_csv(run_dir / "enrichment_concordance_hierarchical.csv", index=False)
-                    # Print brief summary
-                    if not concord_base.empty:
-                        overall = concord_base[concord_base["gene_set"].isna()].iloc[0]
-                        print(f"Baseline concordance normalized score: {overall['normalized_score']:.3f}, frac significant communities: {overall['frac_significant_communities']:.3f}")
-                    if not concord_hier.empty:
-                        overall_h = concord_hier[concord_hier["gene_set"].isna()].iloc[0]
-                        print(f"Hierarchical concordance normalized score: {overall_h['normalized_score']:.3f}, frac significant communities: {overall_h['frac_significant_communities']:.3f}")
-                except Exception as exc:
-                    LOGGER.warning("Failed to compute concordance scores: %s", exc)
-            except Exception as exc:
-                LOGGER.warning("Failed to create enrichment summary: %s", exc)
+            
+            # Note: Per-community CSVs and summaries are already written by _process_enrichment
+            
         except ImportError:
             LOGGER.warning("gseapy not installed; skipping Enrichr enrichment")
         except Exception as exc:  # pragma: no cover - runtime guard
@@ -524,22 +364,96 @@ def main() -> None:
         {"community_id": cid, "members": " ".join(members)} for cid, members in hierarchical_comm.items()
     ]).to_csv(run_dir / "communities_hierarchical.csv", index=False)
 
+    # Export other algorithms community assignments
+    for name, comms in other_results.items():
+        pd.DataFrame([
+            {"community_id": cid, "members": " ".join(members)} for cid, members in comms.items()
+        ]).to_csv(run_dir / f"communities_{name}.csv", index=False)
+
+    # Re-collect all algorithms if not already done (in case enrichment was skipped)
+    all_algorithms = {
+        "baseline": baseline_comm,
+        "hierarchical": hierarchical_comm,
+        **other_results
+    }
+
     # Visualizations per run
-    visualization.plot_network(graph, partition, run_dir / "network.png", layout=config["visualization"]["layout"])
+    print("Generating visualizations for all algorithms...", flush=True)
+    for name, comms in all_algorithms.items():
+        # 1. Network Plot
+        # Convert comms dict (cid->members) to partition dict (node->cid)
+        partition = {}
+        for cid, members in comms.items():
+            for m in members:
+                partition[m] = cid
+        # Ensure all nodes are covered (assign to '0' or similar if missing, though they shouldn't be)
+        # visualization.plot_network handles missing nodes gracefully
+        visualization.plot_network(graph, partition, run_dir / f"network_{name}.png", layout=config["visualization"]["layout"])
+        
+        # 2. Enrichment Bar Plot (if available)
+        # We need to reconstruct the enrichment dict from the results if they exist
+        # Or if we are in the same scope, use enrichment_results
+        # Since enrichment_results is local to the if block, we might need to reload or pass it out.
+        # However, we can just check if the CSV exists or if we have the data.
+        # Actually, let's use the enrichment_results dict if it exists in locals
+        if 'enrichment_results' in locals() and name in enrichment_results:
+             df = enrichment_results[name]
+             if df is not None and not df.empty:
+                 # We need the df_to_enrich_dict helper, which is also local.
+                 # Let's redefine or move the helper to module level? 
+                 # For now, I'll just duplicate the logic or assume it's available if I move the loop inside.
+                 # But I want visualizations even if enrichment is disabled.
+                 pass
+
+    # Hierarchy plot is specific to hierarchical algo
     visualization.plot_hierarchy(hierarchy_root, run_dir / "hierarchy.png")
-    # Plot enrichment bar if any Enrichr results exist
-    if baseline_enrich:
-        visualization.plot_enrichment_bar(
-            baseline_enrich,
-            run_dir / "enrichment_bar.png",
-            top_n=config["visualization"]["top_terms"],
-        )
+    
+    # Plot enrichment bars if available
+    if 'enrichment_results' in locals():
+        cutoff_val = config["enrichment"].get("gseapy_cutoff", 0.05)
+        for name, df in enrichment_results.items():
+            if df is not None and not df.empty:
+                # Convert DF to dict format expected by plot_enrichment_bar
+                # We need to re-implement df_to_enrich_dict logic here or make it accessible
+                enrich_dict = {}
+                # ... (logic from df_to_enrich_dict) ...
+                # Let's copy the logic briefly
+                adj_candidates = ["adjusted_p_value", "Adjusted P-value", "adj_p"]
+                term_candidates = ["term", "Term"]
+                for cid, group in df.groupby("community_id"):
+                    items = []
+                    for _, row in group.iterrows():
+                        term = None
+                        for tcol in term_candidates:
+                            if tcol in row.index and pd.notna(row.get(tcol)):
+                                term = row.get(tcol)
+                                break
+                        q_val = None
+                        for acol in adj_candidates:
+                            if acol in row.index and pd.notna(row.get(acol)):
+                                try: q_val = float(row.get(acol))
+                                except: pass
+                                break
+                        if cutoff_val is not None and (q_val is None or q_val > cutoff_val): continue
+                        if term: items.append({"term": term, "q_value": q_val if q_val is not None else 1.0})
+                    if items: enrich_dict[str(cid)] = items
+                
+                if enrich_dict:
+                    visualization.plot_enrichment_bar(
+                        enrich_dict,
+                        run_dir / f"enrichment_bar_{name}.png",
+                        top_n=config["visualization"]["top_terms"],
+                    )
+
+    # Generate HTML report from template file (results/report_template.html)
 
         # Generate HTML report from template file (results/report_template.html)
         def _write_html_report(run_dir: Path):
                 rep_path = run_dir / "report.html"
-                per_base = run_dir / "per_community_enrich" / "baseline"
-                per_hier = run_dir / "per_community_enrich" / "hierarchical"
+                per_comm_root = run_dir / "per_community_enrich"
+                
+                if not per_comm_root.exists():
+                    return
 
                 def _list_csv(folder: Path):
                     if not folder.exists():
@@ -553,8 +467,11 @@ def main() -> None:
                         return (name,)
                     return sorted(names, key=keyfn)
 
-                baseline_files = _list_csv(per_base)
-                hier_files = _list_csv(per_hier)
+                # Scan for all algorithm subdirectories
+                algo_files = {}
+                for subdir in per_comm_root.iterdir():
+                    if subdir.is_dir():
+                        algo_files[subdir.name] = _list_csv(subdir)
 
                 # read template from repository results/ folder
                 tpl_path = project_root / "results" / "report_template.html"
@@ -565,9 +482,24 @@ def main() -> None:
                         return
 
                 import json
-                baseline_json = json.dumps(baseline_files)
-                hier_json = json.dumps(hier_files)
-                html = tpl.replace('__BASELINE__', baseline_json).replace('__HIER__', hier_json).replace('__RUNNAME__', run_dir.name)
+                algo_files_json = json.dumps(algo_files)
+                
+                # Generate summaries HTML
+                summaries_html = []
+                for name in sorted(algo_files.keys()):
+                    summaries_html.append(f'<li><strong>{name}</strong>: ')
+                    links = []
+                    # Check for summary files
+                    if (run_dir / f"enrichr_{name}.csv").exists():
+                        links.append(f'<a href="enrichr_{name}.csv">Full Results</a>')
+                    if (run_dir / f"enrichment_summary_{name}.csv").exists():
+                        links.append(f'<a href="enrichment_summary_{name}.csv">Summary</a>')
+                    if (run_dir / f"enrichment_concordance_{name}.csv").exists():
+                        links.append(f'<a href="enrichment_concordance_{name}.csv">Concordance</a>')
+                    summaries_html.append(" | ".join(links))
+                    summaries_html.append('</li>')
+                
+                html = tpl.replace('__ALGO_FILES__', algo_files_json).replace('__SUMMARIES_HTML__', "\n".join(summaries_html)).replace('__RUNNAME__', run_dir.name)
 
                 try:
                         with open(rep_path, 'w') as fh:

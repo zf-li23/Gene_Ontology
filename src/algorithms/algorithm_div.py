@@ -1,123 +1,84 @@
-import sys
+"""Divisive Louvain algorithm variants."""
+from __future__ import annotations
+
 import math
+import logging
+from typing import Dict, List, Tuple
+import networkx as nx
+from tqdm import tqdm
 
-class Node:
-    def __init__(self, name):
-        self.name = name
-        self.s = []  # list of int indices
-        self.m = 0
-        self.ex = 0  # initially 0, set to -1 later
+try:
+    from community import community_louvain
+except ImportError:
+    community_louvain = None
 
-sp = []
-T = 0
-n = 0
-c = []
-add = []
-ack = []
-ec = []
-spot = 0
-edge = 0
-degree = [0] * 105
-maxd = 0
+LOGGER = logging.getLogger(__name__)
 
-def cmp_node(a, b):
-    if a.m != b.m:
-        return a.m > b.m
-    return a.name < b.name
+def run_algorithm_div(graph: nx.Graph) -> Dict[str, Dict[str, int]]:
+    """
+    Run 4 variants of divisive Louvain (0.5, 1, 2, Average).
+    Returns a dictionary of {variant_name: partition}.
+    """
+    if community_louvain is None:
+        raise ImportError("python-louvain not installed")
 
-def cmp_pair(a, b):
-    if a[1] != b[1]:
-        return a[1] > b[1]
-    return a[0] < b[0]
+    # Pre-calculate degrees for all nodes
+    # Map node -> degree
+    degrees = dict(graph.degree(weight=None)) # Use unweighted degree for m?
+    # The original code used 'm' which was incremented per edge.
+    # sp[xi].m += 1. So it is unweighted degree.
+    
+    variants = {
+        "div_0_5": lambda d_u, d_v: 1.0 / math.sqrt(d_u) if d_u > 0 else 0,
+        "div_1":   lambda d_u, d_v: 1.0 / d_u if d_u > 0 else 0,
+        "div_2":   lambda d_u, d_v: 1.0 / (d_u * d_u) if d_u > 0 else 0,
+        "div_avg": lambda d_u, d_v: 1.0 / (math.sqrt(d_u) * math.sqrt(d_v)) if d_u > 0 and d_v > 0 else 0
+    }
 
-def in2():
-    global sp, T
-    with open("input.in", "r") as f:
-        T = int(f.readline().strip())
-        for _ in range(T):
-            line = f.readline().strip().split()
-            s1, s2 = line[0], line[1]
-            xi = -1
-            yi = -1
-            for i in range(len(sp)):
-                if sp[i].name == s1:
-                    xi = i
-                if sp[i].name == s2:
-                    yi = i
-            if xi == -1:
-                xi = len(sp)
-                sp.append(Node(s1))
-            if yi == -1:
-                yi = len(sp)
-                sp.append(Node(s2))
-            sp[xi].s.append(yi)
-            sp[xi].m += 1
-            sp[yi].s.append(xi)
-            sp[yi].m += 1
+    results = {}
+    
+    print(f"Running Divisive Louvain variants on {graph.number_of_nodes()} nodes...", flush=True)
+    
+    for name, weight_func in tqdm(variants.items(), desc="Divisive Variants"):
+        # Build weighted graph
+        # Note: Original code produced asymmetric weights for 0.5, 1, 2.
+        # Louvain requires undirected. We will symmetrize by averaging (w_uv + w_vu) / 2.
+        # For div_avg, it is already symmetric.
+        # For div_1 (1/d_u), w_uv = 1/d_u, w_vu = 1/d_v.
+        # Symmetrized = 0.5 * (1/d_u + 1/d_v).
+        
+        g_var = nx.Graph()
+        g_var.add_nodes_from(graph.nodes())
+        
+        edges_to_add = []
+        for u, v in graph.edges():
+            d_u = degrees[u]
+            d_v = degrees[v]
+            
+            w_uv = weight_func(d_u, d_v)
+            w_vu = weight_func(d_v, d_u)
+            
+            final_weight = (w_uv + w_vu) / 2.0
+            edges_to_add.append((u, v, final_weight))
+            
+        g_var.add_weighted_edges_from(edges_to_add)
+        
+        # Run Louvain
+        try:
+            partition = community_louvain.best_partition(g_var, weight='weight', random_state=42)
+            # Filter small communities (size < 3)
+            # partition is node -> comm_id
+            # We need to check sizes
+            from collections import Counter
+            counts = Counter(partition.values())
+            valid_comms = {c for c, count in counts.items() if count >= 3}
+            
+            # Filter partition
+            filtered_partition = {n: c for n, c in partition.items() if c in valid_comms}
+            
+            results[name] = filtered_partition
+        except Exception as e:
+            LOGGER.warning(f"Failed to run Louvain for {name}: {e}")
+            results[name] = {}
 
-def iniout():
-    with open("iniout.out", "w") as f:
-        f.write(str(len(sp)) + '\n')
-        for i in range(len(sp)):
-            f.write(sp[i].name + ' ' + str(sp[i].m) + '\n')
-            for j in sp[i].s:
-                if sp[j].ex == -1:
-                    continue
-                f.write(str(j) + " 1 ")
-            f.write('\n')
-
-def out0.5():
-    with open("out_div0.5.out", "w") as f:
-        f.write(str(len(sp)) + '\n')
-        for i in range(len(sp)):
-            f.write(sp[i].name + ' ' + str(sp[i].m) + '\n')
-            for j in sp[i].s:
-                if sp[j].ex == -1:
-                    continue
-                f.write(str(j) + " " + str(1 / math.sqrt(sp[i].m)) + " ")
-            f.write('\n')
-
-def out2():
-    with open("out_div2.out", "w") as f:
-        f.write(str(len(sp)) + '\n')
-        for i in range(len(sp)):
-            f.write(sp[i].name + ' ' + str(sp[i].m) + '\n')
-            for j in sp[i].s:
-                if sp[j].ex == -1:
-                    continue
-                f.write(str(j) + " " + str(1 / (sp[i].m*sp[i].m)) + " ")
-            f.write('\n')
-
-def out1():
-    with open("out_div1.out", "w") as f:
-        f.write(str(len(sp)) + '\n')
-        for i in range(len(sp)):
-            f.write(sp[i].name + ' ' + str(sp[i].m) + '\n')
-            for j in sp[i].s:
-                if sp[j].ex == -1:
-                    continue
-                f.write(str(j) + " " + str(1 / sp[i].m) + " ")
-            f.write('\n')
-
-def outAverage():
-    with open("out_divAverage.out", "w") as f:
-        f.write(str(len(sp)) + '\n')
-        for i in range(len(sp)):
-            f.write(sp[i].name + ' ' + str(sp[i].m) + '\n')
-            for j in sp[i].s:
-                if sp[j].ex == -1:
-                    continue
-                f.write(str(j) + " " + str(1 / (math.sqrt(sp[i].m)*math.sqrt(sp[j].m))) + " ")
-            f.write('\n')
-
-def main():
-    global sp, n, c, add, ack, ec, spot, edge, degree, maxd
-    in2()
-    iniout()
-    out0.5()
-    out2()
-    out1()
-    outAverage()
-
-if __name__ == "__main__":
-    main()
+    return results

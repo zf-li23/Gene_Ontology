@@ -48,7 +48,12 @@ def plot_network(graph: nx.Graph, partition: Dict[str, int], output_path: Path, 
     else:
         pos = nx.kamada_kawai_layout(graph, weight="weight")
     communities = partition or {node: 0 for node in graph.nodes()}
-    comm_ids = np.array([communities.get(node, 0) for node in graph.nodes()])
+    
+    # Map arbitrary community IDs (strings/ints) to integers 0..N for coloring
+    unique_ids = sorted(list(set(communities.values())), key=lambda x: str(x))
+    id_to_int = {uid: i for i, uid in enumerate(unique_ids)}
+    
+    comm_ids = np.array([id_to_int.get(communities.get(node, unique_ids[0] if unique_ids else 0), 0) for node in graph.nodes()])
     cmap = cm.get_cmap("tab20")
     node_colors = [cmap(c % cmap.N) for c in comm_ids]
 
