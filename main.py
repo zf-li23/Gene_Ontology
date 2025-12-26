@@ -92,6 +92,9 @@ def resolve_dataset_paths(config: Dict, project_root: Path) -> Dict[str, Path]:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Intelligent bio-computation pipeline")
     parser.add_argument("edge_file", nargs="?", help="Optional: run overlapping hierarchical detector on a custom edge list")
+    parser.add_argument("--downstream", action="store_true", help="Analyze CSV outputs in data/downstream and generate evaluations")
+    parser.add_argument("--dataset", choices=["sample", "scrin", "ppi"], help="Optional: dataset type to override config (sample/scrin/ppi)")
+    parser.add_argument("--id-map", help="Optional TSV mapping file with columns 'source_id\tgene_symbol' to translate PPI IDs to gene symbols for enrichment")
     parser.add_argument("--organism", choices=["human", "mouse", "skip"], help="Optional: non-interactive organism choice for enrichment")
     parser.add_argument("--threads", type=int, default=8)
     parser.add_argument("--prune", type=float, default=0.3)
@@ -101,8 +104,101 @@ def main() -> None:
     configure_logging()
     project_root = Path(__file__).resolve().parent
     config = load_config(project_root / "config.yaml")
+    # allow overriding dataset type via CLI
+    if args.dataset:
+        config.setdefault("paths", {})["dataset"] = args.dataset
     paths = config["paths"]
     dataset_paths = resolve_dataset_paths(config, project_root)
+    downstream_dir = project_root / "data" / "downstream"
+    # If downstream mode requested, handle it immediately (avoid prompting for edge file)
+    if args.downstream:
+        output_root = project_root / paths["output_dir"]
+        summary_records = []
+        if not downstream_dir.exists():
+            raise FileNotFoundError(f"Downstream directory not found: {downstream_dir}")
+        print(f"Running downstream evaluations for files in {downstream_dir}", flush=True)
+        for csvf in sorted(downstream_dir.glob("*.csv")):
+            try:
+                print(f"Processing downstream file: {csvf.name}", flush=True)
+                df_out = pd.read_csv(csvf)
+                if "community_id" not in df_out.columns or "members" not in df_out.columns:
+                    LOGGER.warning("Skipping %s: missing required columns 'community_id' and 'members'", csvf)
+                    continue
+                comms = {}
+                for _, row in df_out.iterrows():
+                    cid = str(row["community_id"])
+                    mems = str(row["members"]).strip()
+                    if "\t" in mems:
+                        parts = mems.split("\t")
+                    elif ";" in mems:
+                        parts = [x.strip() for x in mems.split(";") if x.strip()]
+                    else:
+                        parts = [x for x in mems.split() if x]
+                    comms[cid] = parts
+
+                ds_out = output_root / "downstream" / csvf.stem
+                ds_out.mkdir(parents=True, exist_ok=True)
+
+                stats = {
+                    "file": csvf.name,
+                    "n_communities": len(comms),
+                    "mean_community_size": float(pd.Series([len(v) for v in comms.values()]).mean() if comms else 0.0),
+                }
+
+                if config["enrichment"].get("enable_gseapy", False):
+                    available_sets = config["enrichment"].get("gseapy_gene_sets", [])
+                    go_sets = [gs for gs in available_sets if Path(gs).name.startswith("GO_")]
+                    default_org = config.get("enrichment", {}).get("gseapy_organism", "Human")
+                    organism = default_org
+                    gene_sets = go_sets + [gs for gs in available_sets if "KEGG" in Path(gs).name and (organism in Path(gs).name or organism == "Human")]
+                    print(f"Running enrichment for downstream file {csvf.name} (organism={organism})", flush=True)
+                    enrich_df = enrichment_runner.enrich_communities(
+                        comms,
+                        gene_sets=gene_sets,
+                        organism=organism,
+                        cutoff=config["enrichment"].get("gseapy_cutoff", 0.05),
+                        top_terms=config["enrichment"].get("gseapy_top_terms", 10),
+                        out_file=ds_out / "enrichr_all.csv",
+                        out_dir=ds_out / "per_community_enrich",
+                        disable_progress=True,
+                        silence_gseapy=True,
+                    )
+                    try:
+                        summ = enrichment_runner.summarize_enrichment(enrich_df)
+                        if not summ.empty:
+                            summ.to_csv(ds_out / "enrichment_summary.csv", index=False)
+                        concord = enrichment_runner.compute_concordance_scores(enrich_df, comms, cutoff=config["enrichment"].get("gseapy_cutoff", 0.05))
+                        if not concord.empty:
+                            concord.to_csv(ds_out / "enrichment_concordance.csv", index=False)
+                            # find overall row where gene_set is NA
+                            if "gene_set" in concord.columns:
+                                overall = concord[concord["gene_set"].isna()]
+                            else:
+                                overall = concord.tail(1)
+                            if not overall.empty:
+                                orow = overall.iloc[0]
+                                stats.update({
+                                    "normalized_score": float(orow.get("normalized_score", float("nan"))),
+                                    "frac_significant_communities": float(orow.get("frac_significant_communities", float("nan"))),
+                                    "mean_score": float(orow.get("mean_score", float("nan"))),
+                                    "weighted_score": float(orow.get("weighted_score", float("nan"))),
+                                })
+                    except Exception as exc:
+                        LOGGER.warning("Downstream enrichment summarization failed for %s: %s", csvf, exc)
+                else:
+                    print("Enrichment disabled in config; skipping enrichment for downstream files", flush=True)
+
+                pd.DataFrame([stats]).to_csv(ds_out / "summary_stats.csv", index=False)
+                summary_records.append(stats)
+            except Exception as exc:
+                LOGGER.warning("Failed to process downstream file %s: %s", csvf, exc)
+        # write comparison summary for all downstream files
+        if summary_records:
+            comp_out = output_root / "downstream" / "summary_comparison.csv"
+            pd.DataFrame(summary_records).to_csv(comp_out, index=False)
+            print(f"Wrote downstream comparison summary: {comp_out}", flush=True)
+        print("Downstream evaluations complete", flush=True)
+        return
     # interactive edge file choice when not provided via CLI
     if args.edge_file:
         chosen_edge = Path(args.edge_file)
@@ -113,9 +209,18 @@ def main() -> None:
 
     base_stem = chosen_edge.stem
     # handle scrin CSV -> TSV conversion automatically
-    if chosen_edge.suffix.lower() == ".csv":
+    # dataset-specific conversions
+    if config.get("paths", {}).get("dataset") == "scrin" and chosen_edge.suffix.lower() == ".csv":
         base_stem = chosen_edge.stem  # keep original stem for naming outputs
         chosen_edge = data_loader.convert_scrin_csv_to_tsv(chosen_edge)
+    if config.get("paths", {}).get("dataset") == "ppi":
+        # support STRING/COG-style 'links' files (whitespace-separated combined_score)
+        if chosen_edge.suffix.lower() in (".txt", ".gz") or "links" in chosen_edge.name:
+            try:
+                converted = data_loader.convert_string_links_to_tsv(chosen_edge)
+                chosen_edge = converted
+            except Exception:
+                LOGGER.warning("Failed to convert PPI links file %s; expecting a TSV with gene_a/gene_b/weight", chosen_edge)
 
     go_path = dataset_paths.get("go_path")
     output_root = project_root / paths["output_dir"]
@@ -136,20 +241,113 @@ def main() -> None:
 
     edges = data_loader.load_edge_list(chosen_edge, weighted=config["preprocessing"]["weighted"])
 
+    # If user provided an ID mapping (e.g., COG -> gene symbol), apply it to edges
+    if args.id_map:
+        id_map_path = Path(args.id_map)
+        if not id_map_path.exists():
+            LOGGER.warning("ID map file not found: %s (skipping mapping)", id_map_path)
+        else:
+            try:
+                map_df = pd.read_csv(id_map_path, sep="\t", header=None, names=["source", "target"] )
+                id_map = dict(map_df.values)
+                # map gene_a/gene_b
+                edges["gene_a"] = edges["gene_a"].map(lambda x: id_map.get(x, x))
+                edges["gene_b"] = edges["gene_b"].map(lambda x: id_map.get(x, x))
+            except Exception as exc:
+                LOGGER.warning("Failed to apply id map: %s", exc)
+
     # Note: GO annotation files are no longer used for hypergeometric tests.
     # Enrichment is performed via gseapy through `enrichment_runner` when enabled in config.
+
+    # If downstream mode requested, process all CSV outputs in data/downstream
+    if args.downstream:
+        if not downstream_dir.exists():
+            raise FileNotFoundError(f"Downstream directory not found: {downstream_dir}")
+        print(f"Running downstream evaluations for files in {downstream_dir}", flush=True)
+        for csvf in sorted(downstream_dir.glob("*.csv")):
+            try:
+                print(f"Processing downstream file: {csvf.name}", flush=True)
+                df_out = pd.read_csv(csvf)
+                # Expect columns: community_id, members (space-separated or semicolon/comma)
+                if "community_id" not in df_out.columns or "members" not in df_out.columns:
+                    LOGGER.warning("Skipping %s: missing required columns 'community_id' and 'members'", csvf)
+                    continue
+                comms = {}
+                for _, row in df_out.iterrows():
+                    cid = str(row["community_id"])
+                    mems = str(row["members"]).strip()
+                    # support different separators
+                    if "\t" in mems:
+                        parts = mems.split("\t")
+                    elif ";" in mems:
+                        parts = [x.strip() for x in mems.split(";") if x.strip()]
+                    else:
+                        parts = [x for x in mems.split() if x]
+                    comms[cid] = parts
+
+                # prepare per-file output dir
+                ds_out = output_root / "downstream" / csvf.stem
+                ds_out.mkdir(parents=True, exist_ok=True)
+
+                # basic stats
+                stats = {
+                    "file": csvf.name,
+                    "n_communities": len(comms),
+                    "mean_community_size": float(pd.Series([len(v) for v in comms.values()]).mean() if comms else 0.0),
+                }
+                pd.DataFrame([stats]).to_csv(ds_out / "summary_stats.csv", index=False)
+
+                # If enrichment enabled, run enrichment and summarize
+                if config["enrichment"].get("enable_gseapy", False):
+                    # choose gene sets as in normal flow
+                    available_sets = config["enrichment"].get("gseapy_gene_sets", [])
+                    go_sets = [gs for gs in available_sets if Path(gs).name.startswith("GO_")]
+                    # select organism default
+                    default_org = config.get("enrichment", {}).get("gseapy_organism", "Human")
+                    organism = default_org
+                    gene_sets = go_sets + [gs for gs in available_sets if "KEGG" in Path(gs).name and (organism in Path(gs).name or organism == "Human")]
+                    print(f"Running enrichment for downstream file {csvf.name} (organism={organism})", flush=True)
+                    enrich_df = enrichment_runner.enrich_communities(
+                        comms,
+                        gene_sets=gene_sets,
+                        organism=organism,
+                        cutoff=config["enrichment"].get("gseapy_cutoff", 0.05),
+                        top_terms=config["enrichment"].get("gseapy_top_terms", 10),
+                        out_file=ds_out / "enrichr_all.csv",
+                        out_dir=ds_out / "per_community_enrich",
+                        disable_progress=True,
+                        silence_gseapy=True,
+                    )
+                    # write summary and concordance if possible
+                    try:
+                        summ = enrichment_runner.summarize_enrichment(enrich_df)
+                        if not summ.empty:
+                            summ.to_csv(ds_out / "enrichment_summary.csv", index=False)
+                        concord = enrichment_runner.compute_concordance_scores(enrich_df, comms, cutoff=config["enrichment"].get("gseapy_cutoff", 0.05))
+                        if not concord.empty:
+                            concord.to_csv(ds_out / "enrichment_concordance.csv", index=False)
+                    except Exception as exc:
+                        LOGGER.warning("Downstream enrichment summarization failed for %s: %s", csvf, exc)
+                else:
+                    print("Enrichment disabled in config; skipping enrichment for downstream files", flush=True)
+            except Exception as exc:
+                LOGGER.warning("Failed to process downstream file %s: %s", csvf, exc)
+        print("Downstream evaluations complete", flush=True)
+        return
 
     graph = preprocess.prepare_graph(
         edges,
         keep_giant_component=config["preprocessing"]["keep_giant_component"],
         weighted=config["preprocessing"]["weighted"],
     )
+    print(f"Prepared graph: {graph.number_of_nodes()} nodes, {graph.number_of_edges()} edges", flush=True)
 
     partition = run_louvain(
         graph,
         resolution=config["algorithms"]["louvain"]["resolution"],
         random_state=config["algorithms"]["louvain"].get("random_state"),
     )
+    print(f"Baseline Louvain produced {len(set(partition.values()))} communities", flush=True)
     baseline_comm = partition_to_dict(partition, prefix="L")
 
     hierarchical = HierarchicalLouvain(
@@ -160,6 +358,7 @@ def main() -> None:
         random_state=config["algorithms"]["louvain"].get("random_state"),
     )
     hierarchy_root = hierarchical.fit(graph)
+    print("Hierarchical detection complete", flush=True)
     hierarchical_comm = hierarchy_to_dict(hierarchy_root)
 
     # Optional Enrichr/GSEAPY enrichment for external databases (e.g., KEGG, GO)

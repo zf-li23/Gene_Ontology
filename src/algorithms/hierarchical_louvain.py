@@ -62,6 +62,8 @@ class HierarchicalLouvain:
             return node
         if graph.number_of_nodes() < self.min_size:
             return node
+        # Informative print to indicate recursive Louvain call
+        print(f"Running Louvain at depth {depth} on subgraph with {graph.number_of_nodes()} nodes...", flush=True)
         partition = community_louvain.best_partition(
             graph,
             weight="weight",
@@ -77,6 +79,7 @@ class HierarchicalLouvain:
             if len(members) < self.min_size:
                 continue
             subgraph = graph.subgraph(members).copy()
+            print(f"Recursing into community {comm_id} at depth {depth+1} with {len(members)} genes", flush=True)
             LOGGER.debug("Recursing into community %s at depth %s with %s genes", comm_id, depth + 1, len(members))
             child = self._build_node(subgraph, depth + 1)
             node.children.append(child)

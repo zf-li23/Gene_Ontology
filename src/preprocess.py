@@ -6,16 +6,46 @@ from typing import Tuple
 
 import networkx as nx
 import pandas as pd
+from tqdm import tqdm
 
 LOGGER = logging.getLogger(__name__)
 
 
 def build_graph_from_edgelist(edges: pd.DataFrame, weighted: bool = True) -> nx.Graph:
-    """Create an undirected graph from the provided edge table."""
-    graph = nx.Graph()
-    for _, row in edges.iterrows():
-        attrs = {"weight": float(row["weight"]) if weighted else 1.0}
-        graph.add_edge(row["gene_a"], row["gene_b"], **attrs)
+    """Create an undirected graph from the provided edge table.
+
+    This implementation avoids slow `iterrows()` and potential pandas
+    dtype-inference memory spikes by coercing the weight column to numeric
+    with `pd.to_numeric` and using NetworkX's optimized
+    `from_pandas_edgelist` when possible. For very large tables a simple
+    progress log is emitted.
+    """
+    # Ensure expected columns exist
+    if not {"gene_a", "gene_b"}.issubset(edges.columns):
+        raise ValueError("Edge table must contain 'gene_a' and 'gene_b' columns")
+
+    df = edges.copy()
+
+    LOGGER.info("Preparing to build graph from %s edges (weighted=%s)", len(df), weighted)
+
+    # Coerce weight column to float if present; fill missing with 1.0
+    if weighted and "weight" in df.columns:
+        df["weight"] = pd.to_numeric(df["weight"], errors="coerce")
+        df["weight"] = df["weight"].fillna(1.0).astype(float)
+    else:
+        # If not weighted or no weight col, create a default
+        df["weight"] = 1.0
+
+    # Use networkx helper which is vectorized and efficient
+    try:
+        graph = nx.from_pandas_edgelist(df, source="gene_a", target="gene_b", edge_attr=["weight"], create_using=nx.Graph())
+    except Exception:
+        # Fallback: build incrementally with a progress indicator
+        graph = nx.Graph()
+        total = len(df)
+        for _, row in tqdm(df.iterrows(), total=total, desc="Adding edges", unit="rows"):
+            graph.add_edge(row["gene_a"], row["gene_b"], weight=float(row.get("weight", 1.0)))
+
     LOGGER.info("Graph assembled: %s nodes, %s edges", graph.number_of_nodes(), graph.number_of_edges())
     return graph
 

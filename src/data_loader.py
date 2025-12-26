@@ -123,6 +123,43 @@ def load_go_annotations(path: Path) -> Dict[str, List[str]]:
     return grouped.to_dict()
 
 
+def convert_string_links_to_tsv(input_path: Path, out_path: Optional[Path] = None, score_col: int = 2) -> Path:
+    """Convert STRING/COG-style links file to a TSV with columns gene_a,gene_b,weight.
+
+    The input is expected to be whitespace-separated with at least three columns: proteinA proteinB combined_score
+    Weight is normalized to [0,1] by dividing combined_score by 1000.
+    """
+    if out_path is None:
+        out_path = input_path.with_suffix(".tsv")
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(input_path, "r") as src, open(out_path, "w") as dst:
+        # try to detect and skip header lines that are not data
+        first = src.readline()
+        tokens = first.strip().split()
+        if len(tokens) < 3 or not tokens[2].replace('.', '').isdigit():
+            # assume first line is header; write header and continue
+            pass
+        else:
+            # first line is data; reset file pointer
+            src.seek(0)
+        dst.write("gene_a\tgene_b\tweight\n")
+        for line in src:
+            if not line.strip():
+                continue
+            parts = line.strip().split()
+            if len(parts) <= score_col:
+                continue
+            a, b = parts[0], parts[1]
+            try:
+                score = float(parts[score_col])
+            except Exception:
+                # skip malformed score
+                continue
+            weight = max(0.0, min(1.0, score / 1000.0))
+            dst.write(f"{a}\t{b}\t{weight:.3f}\n")
+    return out_path
+
+
 def generate_demo_network(edge_path: Path, go_path: Path, num_nodes: int = 30, seed: int = 7) -> None:
     """Write a quick synthetic network and GO table for offline experimentation."""
     rng = random.Random(seed)
