@@ -1,233 +1,250 @@
-"""Algorithm 2: DFS-based community detection (Loose/Tight variant)."""
-from __future__ import annotations
-
-import logging
-from typing import Dict, List, Optional, Any
-import networkx as nx
-from tqdm import tqdm
-
-LOGGER = logging.getLogger(__name__)
+import sys
+import math
+from collections import defaultdict
 
 class Node:
-    def __init__(self, name: str):
+    def __init__(self, name):
         self.name = name
-        self.neighbors: List[Node] = []
-        self.m = 0  # degree (or similar metric)
-        self.ex = 0  # status: 0 = active, -1 = removed/processed
+        self.s = []      # 邻接节点索引
+        self.m = 0       # 邻居数量
+        self.ex = 0      # 标记是否被处理
 
-    def __repr__(self):
-        return f"Node({self.name}, m={self.m})"
+sp = []                 # 物种列表
+T = 0
+n = 0
+c = [0] * 10005
+s1 = ""
+s2 = ""
+add = []                # 存储分组
+ack = [0] * 1000005
+spot = 0
+edge = 0
+degree = [0] * 105
+maxd = 0
+global count
+count = 0
+ec = [0] * 100005
+k1=1    #0 for loose, 1 for very loose/tight
+k2=3  #2.3 for very loose, 3 for loose/tight
 
-class Algorithm2:
-    def __init__(self, graph: nx.Graph, k1: float = 1, k2: float = 2.3):
-        self.graph = graph
-        self.k1 = k1
-        self.k2 = k2
-        self.nodes: List[Node] = []
-        self.node_map: Dict[str, Node] = {}
-        self.c: Dict[Node, int] = {}
-        self.add: List[List[Node]] = []
-        self.ack: List[int] = []
-        self.ec: Dict[Node, int] = {}
-        
-        self._build_internal_graph()
+def cmp_node(a, b):
+    if a.m != b.m:
+        return a.m > b.m
+    return a.name < b.name
 
-    def _build_internal_graph(self):
-        # Convert nx.Graph to internal Node structure
-        for n_name in self.graph.nodes():
-            node = Node(str(n_name))
-            self.nodes.append(node)
-            self.node_map[str(n_name)] = node
-        
-        for u, v in self.graph.edges():
-            nu = self.node_map[str(u)]
-            nv = self.node_map[str(v)]
-            nu.neighbors.append(nv)
-            nv.neighbors.append(nu)
-            nu.m += 1
-            nv.m += 1
+def cmp_pair(a, b):
+    if a[1] != b[1]:
+        return a[1] > b[1]
+    return a[0] < b[0]
 
-    def dfs(self, u: Node, dep: int, mp: Dict[Node, int], group: List[Node]):
-        self.c[u] = dep
-        res = []
-        temp = []
-        
-        # Collect valid neighbors
-        for v in u.neighbors:
-            if v.ex == -1:
-                continue
-            if self.c.get(v, 0) == 0 or self.c.get(v, 0) > dep + 1:
-                mp[v] = mp.get(v, 0) + 1
-        
-        # Filter neighbors based on depth condition
-        for k, v in mp.items():
-            if self.c.get(k, 0) == 0 or self.c.get(k, 0) > dep + 1:
-                res.append((k, v))
-        
-        # Sort by count desc, then name (or object id)
-        res.sort(key=lambda x: (-x[1], x[0].name))
-        
-        ck = 0
-        for r in res:
-            node_r, count_r = r
-            threshold = dep - max(0, int((dep - self.k1) / self.k2))
-            if count_r >= threshold:
-                ck += 1
-                temp.append(node_r)
-                del mp[node_r]
-                group.append(node_r)
-                # Pass a copy of mp to avoid pollution from children if that's the issue,
-                # or ensure we revert changes. The original code passed 'mp' directly,
-                # which in Python modifies the same dict. This causes counts to accumulate
-                # across branches, likely causing infinite loops/growth.
-                # We will pass a copy to enforce proper scoping.
-                self.dfs(node_r, dep + 1, mp.copy(), group)
-                group.pop()
-                mp[node_r] = count_r
+def in2():
+    global T, sp
+    with open("input.in", "r") as inFile:
+        T = int(inFile.readline().strip())
+        for _ in range(T):
+            s1, s2 = inFile.readline().split()
+            xi = -1
+            yi = -1
+            for i, node in enumerate(sp):
+                if node.name == s1:
+                    xi = i
+                if node.name == s2:
+                    yi = i
+            if xi == -1:
+                xi = len(sp)
+                sp.append(Node(s1))
+            if yi == -1:
+                yi = len(sp)
+                sp.append(Node(s2))
+            sp[xi].s.append(yi)
+            sp[xi].m += 1
+            sp[yi].s.append(xi)
+            sp[yi].m += 1
 
+def dfs(u, dep, mp, group):
+    c[u] = dep
+    res = []
+    temp = []
+    renum = []
+    thisgroup = group
+    for v in sp[u].s:
+        if sp[v].ex == -1:
+            continue
+        if c[v] == 0 or c[v] > dep + 1:
+            renum.append(v)
+            if v not in mp:
+                mp[v] = 1
             else:
-                break
-        
-        for t in temp:
-            self.c[t] = 0
-            
-        if ck == 0:
-            # Found a group
-            # Create a copy of the current group
-            new_group = sorted(group[:], key=lambda x: x.name)
-            self.add.append(new_group)
+                mp[v] += 1
+    for v, cnt in mp.items():
+        if c[v] == 0 or c[v] > dep + 1:
+            res.append((v, cnt))
+    res.sort(key=lambda x: (-x[1], x[0]))
+    ck = 0
+    for v, cnt in res:
+        if cnt >= dep - max(0, int((dep - k1) / k2)):
+            ck += 1
+            temp.append(v)
+            mp.pop(v)
+            thisgroup.append(v)
+            dfs(v, dep + 1, mp, thisgroup)
+            thisgroup.pop()
+            mp[v] = cnt
+        else:
+            break
+    for v in renum:
+        mp[v] -= 1
+        if mp[v] == 0:
+            mp.pop(v)
+    for v in temp:
+        c[v] = 0
+    if ck == 0:
+        thisgroup.sort()
+        add.append(thisgroup[:])
 
-    def merge(self, a_idx: int, b_idx: int):
-        # Merge group b into group a
-        group_a = self.add[a_idx]
-        group_b = self.add[b_idx]
-        
-        combined = group_a + group_b
-        # Unique and sort
-        combined = sorted(list(set(combined)), key=lambda x: x.name)
-        self.add[a_idx] = combined
-        self.add[b_idx] = [] # Clear b
+def merge(a, b):
+    add[b].extend(add[a])
+    add[b].sort()
+    add[a].clear()
+    if not add[b]:
+        return
+    add[a].append(add[b][0])
+    for i in range(1, len(add[b])):
+        if add[b][i] != add[b][i - 1]:
+            add[a].append(add[b][i])
+    add[b].clear()
 
-    def compare(self, a_idx: int, b_idx: int):
-        group_a = self.add[a_idx]
-        group_b = self.add[b_idx]
-        
-        if not group_a or not group_b:
-            return
+def compare(a, b):
+    if len(add[a]) < len(add[b]):
+        a, b = b, a
+    if len(add[a]) == 0:
+        ack[b] = 1
+        ack[a] = 1
+        return
+    if len(add[b]) == 0:
+        ack[b] = 1
+        return
+    xi = yi = 0
+    simi = 0
+    ck = 0
+    while xi < len(add[a]) and yi < len(add[b]):
+        while xi < len(add[a]) and add[a][xi] < add[b][yi]:
+            xi += 1
+        if xi >= len(add[a]):
+            ck = 1
+            break
+        if add[a][xi] == add[b][yi]:
+            xi += 1
+            yi += 1
+            simi += 1
+        else:
+            ck = 1
+            break
+    if ck == 0:
+        ack[b] = 1
+    if simi / len(add[b]) >= 0.7:
+        ack[b] = 1
+        merge(a, b)
 
-        # Intersection
-        set_a = set(group_a)
-        set_b = set(group_b)
-        intersection = set_a.intersection(set_b)
-        simi = len(intersection)
-        
-        target_len = min(len(group_a), len(group_b))
-        if target_len == 0:
-            return
-            
-        if simi / target_len >= 0.7:
-            self.ack[b_idx] = 1 # Mark b as merged
-            self.merge(a_idx, b_idx)
+def iniout():
+    with open("iniout.out", "w") as outFile:
+        outFile.write(f"{len(sp)}\n")
+        for node in sp:
+            outFile.write(f"{node.name} {node.m}\n")
+            for v in node.s:
+                if sp[v].ex == -1:
+                    continue
+                outFile.write(f"{v} 1 ")
+            outFile.write("\n")
 
-    def run(self) -> Dict[str, List[str]]:
-        # Sort nodes by degree desc, name asc
-        self.nodes.sort(key=lambda x: (-x.m, x.name))
-        
-        n = len(self.nodes)
-        self.ack = [0] * 1000005 # Arbitrary large size from original code, we can use dynamic
-        
-        final_communities = {} # community_id -> list of node names
-        comm_counter = 0
-        
-        # Progress bar
-        pbar = tqdm(total=n, desc="Algorithm 2 Processing")
-        
-        for i in range(n):
-            node = self.nodes[i]
-            if node.ex == -1:
-                pbar.update(1)
+
+def out():
+    global spot, edge, maxd
+    with open("out2(tight).out", "w") as outFile:
+        outFile.write(f"{spot}\n")
+        for i in range(n, len(sp)):
+            node = sp[i]
+            outFile.write(f"{node.name} {node.m}\n")
+            for v in node.s:
+                if sp[v].ex == -1:
+                    continue
+                outFile.write(f"{v - n} 1 ")
+            outFile.write("\n")
+
+def main():
+    global n, spot, edge, maxd
+    in2()
+    iniout()
+    print(f"Original total spots: {len(sp)}")
+    sp.sort(key=lambda x: (-x.m, x.name))
+    n = len(sp)
+    for i in range(n):
+        print(f"Processing species {i}: {sp[i].name}")
+        for j in range(len(add)):
+            ack[j] = 0
+        for v in sp[i].s:
+            if sp[v].ex == -1:
                 continue
-                
-            # Reset ack for current iteration groups
-            self.add = []
-            
-            # Mark neighbors
-            for neighbor in node.neighbors:
-                if neighbor.ex == -1:
+            ec[v] = 1
+        add.clear()
+        for j in range(len(sp)):
+            c[j] = 0
+        dfs(i, 1, {}, [])
+        sp[i].ex = -1
+        print(f"    Found {len(add)} groups.")
+        for j in range(len(add)):
+            if ack[j] == 1:
+                continue
+            for k in range(j + 1, len(add)):
+                if ack[k] == 1:
                     continue
-                self.ec[neighbor] = 1
-            
-            # Reset c
-            self.c = {}
-            
-            # DFS
-            self.dfs(node, 1, {}, [])
-            
-            node.ex = -1 # Mark processed
-            
-            # Compare and merge groups found in this iteration
-            self.ack = [0] * len(self.add)
-            
-            for j in range(len(self.add)):
-                if self.ack[j] == 1:
+                compare(j, k)
+        addsize = 0
+        for j in range(len(add)):
+            if ack[j] == 1:
+                continue
+            addsize += 1
+            # print(f"      Real group {addsize}: ", end="")
+            # for v in add[j]:
+            #     print(f"{v},{sp[v].name} ", end="")
+            # print()
+            x = len(sp)
+            sp.append(Node(sp[i].name))
+            for v in add[j]:
+                if ec[v] == 0:
                     continue
-                for k in range(j + 1, len(self.add)):
-                    if self.ack[k] == 1:
-                        continue
-                    
-                    g1 = self.add[j]
-                    g2 = self.add[k]
-                    if not g1 or not g2: continue
-                    
-                    s1 = set(g1)
-                    s2 = set(g2)
-                    inter = len(s1.intersection(s2))
-                    smaller = min(len(g1), len(g2))
-                    if smaller > 0 and inter / smaller >= 0.7:
-                        # Merge
-                        combined = list(s1.union(s2))
-                        combined.sort(key=lambda x: x.name)
-                        self.add[j] = combined
-                        self.add[k] = []
-                        self.ack[k] = 1
-            
-            # Collect "Real groups"
-            for j in range(len(self.add)):
-                if self.ack[j] == 1:
-                    continue
-                group = self.add[j]
-                if not group: continue
-                
-                # Filter small communities
-                if len(group) < 3:
-                    continue
+                sp[x].s.append(v)
+                sp[x].m += 1
+                sp[v].s.append(x)
+                sp[v].m += 1
+        print(f"    Found {addsize} real groups.")
+        # print("-------------------------------------------")
+        for v in sp[i].s:
+            ec[v] = 0
+    for node in sp:
+        if node.ex == -1:
+            continue
+        spot += 1
+        # print(f"{node.name} {node.m}")
+        d = 0
+        for v in node.s:
+            if sp[v].ex == -1:
+                continue
+            d += 1
+            # print(f"({v},{sp[v].name}) ", end="")
+        # print()
+        node.m = d
+        edge += d
+        maxd = max(maxd, d)
+        degree[d] += 1
+    edge //= 2
+    print(f"Total spots: {spot}, Total relationships: {edge}")
+    print("Degree distribution:")
+    for i in range(1, maxd + 1):
+        if degree[i] > 0:
+            print(f"Degree {i}: {degree[i]} spots")
 
-                # Save this group
-                comm_id = f"A2_{comm_counter}"
-                final_communities[comm_id] = [n.name for n in group]
-                comm_counter += 1
-                
-                # Add virtual node for overlaps
-                new_node = Node(node.name) # Same name as current node `sp[i]`
-                self.nodes.append(new_node)
-                
-                for member in group:
-                    if self.ec.get(member, 0) == 1:
-                        new_node.neighbors.append(member)
-                        member.neighbors.append(new_node)
-                        new_node.m += 1
-                        member.m += 1
-            
-            # Unmark ec
-            for neighbor in node.neighbors:
-                self.ec[neighbor] = 0
-            
-            pbar.update(1)
-            
-        pbar.close()
-        return final_communities
+    out()
 
-
-def run_algorithm2(graph: nx.Graph, k1: float = 1, k2: float = 2.3) -> Dict[str, List[str]]:
-    algo = Algorithm2(graph, k1, k2)
-    return algo.run()
+if __name__ == "__main__":
+    main()
