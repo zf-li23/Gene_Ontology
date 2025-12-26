@@ -109,6 +109,24 @@ python main.py data/scrin/test.csv
 python main.py data/scrin/test.csv --organism mouse --threads 4 --prune 0.25 --resolution 1.0
 ```
 
+下游评估模式（比较算法输出）
+--------------------------------
+
+如果你或队友已经运行了多种算法并把结果写在 `data/downstream/`（CSV，列：`community_id,members`），可以使用 `--downstream` 模式对这些结果批量做富集与一致性评估，并生成一个汇总比较表：
+
+```bash
+# 在项目根目录运行，不需要提供 edge_file
+python main.py --downstream
+```
+
+该命令会遍历 `data/downstream/*.csv`，对每个文件运行（若在 `config.yaml` 中启用）：
+- 每社区的 Enrichr 富集（输出到 `results/downstream/<file_stem>/per_community_enrich/`）
+- 每文件的富集汇总与 concordance 评分（`enrichment_summary.csv`, `enrichment_concordance.csv`）
+- 将所有下游文件的整体指标（例如 `normalized_score`, `mean_score`, `weighted_score`, `frac_significant_communities`）写入 `results/downstream/summary_comparison.csv`，便于直接比较算法优劣。
+
+默认行为不需要交互式提供 `edge_file`，也不会触发社区检测流程；它只对你已经生成的下游 CSV 做评价。
+
+
 运行行为摘要：
 
 - 会删除并重新创建 `results/<edge_stem>/`（保证输出干净）
