@@ -1,174 +1,111 @@
-# Intelligent Bio Computation Pipeline
+# Intelligent Bio Pipeline (智能生物计算流程)
 
-Unsupervised community detection and functional validation on gene/protein interaction networks. Supports standard Louvain + GO enrichment as well as a fast, overlapping, multi-level detector tuned for large PPIs.
+这是一个集成了多种社区检测算法与基因集富集分析的综合生物信息学流水线。旨在从蛋白质相互作用网络（PPI）或其他生物网络中识别功能模块，并自动进行生物学意义注释。
 
-## Features
-- Data loaders for STRING/BioGRID-style edge lists and GO annotations (tab-delimited).
-- Preprocessing: weighted graphs, giant-component trimming, weight normalization.
-- Baseline Louvain and hierarchical Louvain (python-louvain).
-- Overlapping, multi-level detector (isolate-partition + parallel Louvain + edge-seeded expansion) with topology self-checks.
-- GO enrichment (hypergeometric + FDR) and matplotlib visualizations.
-- Config-driven defaults plus CLI mode for custom edge lists.
+## 主要功能
 
-## Project Layout
-# Intelligent Bio Pipeline
+*   **多算法集成**：
+    *   **Baseline Louvain**: 标准 Louvain 算法。
+    *   **Hierarchical Louvain**: 层次化 Louvain 算法。
+    *   **Divisive Louvain**: 包含 4 种加权变体 (`div_0_5`, `div_1`, `div_2`, `div_avg`)，模拟 C++ 版本的节点度加权逻辑，并包含微小社区过滤。
+    *   **Spectral Clustering**: 自动估计 $k$ 值的谱聚类算法，包含 Eigengap Heuristic。
+    *   **Algorithm 2 & 3**: 基于 DFS 的社区检测算法，包含全局合并（Global Merge）策略以消除冗余社区，并具备未分配节点的后处理机制以提升覆盖率。
+*   **自动富集分析**：集成 `gseapy`，支持 GO (BP, CC, MF) 和 KEGG 通路富集分析。
+*   **可视化报告**：自动生成网络结构图（节点大小代表加权度，颜色代表社区）、富集条形图，并汇总为交互式 HTML 报告。
+*   **灵活配置**：支持通过 `config.yaml` 配置或命令行参数覆盖。
 
-这是一个集成了网络社区检测与基因集富集分析的流水线示例，包含：
+## 安装指南
 
-- Louvain 与层次化 Louvain 社区检测
-- 基于 `gseapy` / Enrichr 的 GO / KEGG 富集（支持本地 GMT）
-- 每次运行会在 `results/<edge_stem>/` 产出表格、图像，并生成交互式 HTML 报告用于算法评价
-
-下面是从 GitHub 克隆仓库并查看报告的使用说明（在终端中运行）：
-
-```bash
-git clone https://github.com/zf-li23/Gene_Ontology.git
-cd Gene_Ontology
-```
-
-然后按照以下步骤操作：
-
-## 1) 创建 & 激活 Python 环境（推荐 conda）
-
-推荐使用 conda（与测试环境一致）：
+推荐使用 Conda 环境：
 
 ```bash
 conda create -n genomics python=3.11 -y
 conda activate genomics
-```
-
-如果不使用 conda，也可以用 venv：
-
-```bash
-python -m venv .venv
-source .venv/bin/activate
-```
-
-## 2) 安装依赖
-
-```bash
-pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
-如果你使用 conda 并偏好 conda 包，可以按需用 `conda install` 安装对应包。
+## 快速开始
 
-## 3) 下载 GMT 数据库（推荐，本地化可显著加速富集）
-
-仓库含 `download_GMT.py`（用于从 Enrichr/MAayan 下载并生成 GMT 文件），运行：
-
-```bash
-# 将数据库写到 data/gmt
-python download_GMT.py --outdir data/gmt
-```
-
-下载后 `data/gmt/` 下会包含 KEGG 与 GO 的 GMT 文件，主流程会优先使用本地 GMT。
-
-## 4) 准备要分析的边表（edge list）
-
-把你要检测的边表拷贝到 `data/scrin/` 下（示例使用 `test.csv`）：
-
-```bash
-cp /path/to/my_edges.csv data/scrin/test.csv
-```
-
-注意：如果输入是特定 SCRIN 风格 CSV，脚本会自动做必要的格式转换。
-
-## 5) 配置（可选）
-
-编辑 `config.yaml` 来修改：
-- `paths.dataset`（scrin / ppi / sample）
-- `enrichment.gseapy_gene_sets`（可填本地 GMT 路径 `data/gmt/*.gmt`）
-- `enrichment.gseapy_cutoff`（显著性阈值，例如 0.05）
-
-## 6) 运行主流水线（示例命令与参数）
-
-基本运行（交互选择或按 config 默认）：
+使用默认配置运行示例数据：
 
 ```bash
 python main.py
 ```
 
-使用指定边文件：
+或者指定一个边缘列表文件：
 
 ```bash
-python main.py data/scrin/test.csv
+python main.py data/scrin/test.csv --dataset scrin
 ```
 
-常用 CLI 参数：
+## 命令行使用详解
 
-- `edge_file`（位置参数）: 指定边表文件路径
-- `--organism` : `human` | `mouse` | `skip`（决定是否附加相应 KEGG 文件；GO GMT 始终包含）
-- `--threads`  : 并行线程数（默认 8）
-- `--prune`    : 剔除阈值（默认 0.3）
-- `--resolution`: Louvain 分辨率（默认 1.0）
+`main.py` 是程序的统一入口，支持以下参数：
 
-示例（非交互、指定 organism 与线程）：
-
+### 基础用法
 ```bash
-python main.py data/scrin/test.csv --organism mouse --threads 4 --prune 0.25 --resolution 1.0
+python main.py [EDGE_FILE] [OPTIONS]
 ```
 
-下游评估模式（比较算法输出）
---------------------------------
+### 参数说明
 
-如果你或队友已经运行了多种算法并把结果写在 `data/downstream/`（CSV，列：`community_id,members`），可以使用 `--downstream` 模式对这些结果批量做富集与一致性评估，并生成一个汇总比较表：
+*   **`EDGE_FILE`** (可选位置参数):
+    *   指定输入的网络边缘列表文件路径（支持 CSV, TSV, TXT）。
+    *   如果不提供，程序将使用 `config.yaml` 中定义的默认路径，或进入交互模式询问路径。
 
-```bash
-# 在项目根目录运行，不需要提供 edge_file
-python main.py --downstream
-```
+*   **`--dataset`** (可选):
+    *   指定数据集类型，用于通过特定逻辑解析输入文件。
+    *   可选值:
+        *   `sample`: 默认格式。
+        *   `scrin`: 针对 SCRIN 数据集的格式（自动处理 CSV 转 TSV）。
+        *   `ppi`: 针对 PPI 网络（如 STRING 数据库）的格式。
 
-该命令会遍历 `data/downstream/*.csv`，对每个文件运行（若在 `config.yaml` 中启用）：
-- 每社区的 Enrichr 富集（输出到 `results/downstream/<file_stem>/per_community_enrich/`）
-- 每文件的富集汇总与 concordance 评分（`enrichment_summary.csv`, `enrichment_concordance.csv`）
-- 将所有下游文件的整体指标（例如 `normalized_score`, `mean_score`, `weighted_score`, `frac_significant_communities`）写入 `results/downstream/summary_comparison.csv`，便于直接比较算法优劣。
+*   **`--organism`** (可选):
+    *   指定富集分析的目标物种。
+    *   可选值:
+        *   `human` (或 `h`): 人类 (Homo sapiens)。
+        *   `mouse` (或 `m`): 小鼠 (Mus musculus)。
+        *   `skip` (或 `s`): 跳过富集分析步骤。
+    *   如果不指定，程序将在运行时交互式询问。
 
-默认行为不需要交互式提供 `edge_file`，也不会触发社区检测流程；它只对你已经生成的下游 CSV 做评价。
+*   **`--id-map`** (可选):
+    *   指定 ID 映射文件路径（TSV 格式，两列：`source_id`, `gene_symbol`）。
+    *   用于将网络中的 ID（如 COG ID）转换为基因符号，以便进行富集分析。
 
+*   **`--threads`** (可选):
+    *   指定并行处理的线程数（默认为 8）。
 
-运行行为摘要：
+*   **`--resolution`** (可选):
+    *   Louvain 算法的分辨率参数（默认为 1.0）。值越大，社区越小；值越小，社区越大。
 
-- 会删除并重新创建 `results/<edge_stem>/`（保证输出干净）
-- 执行 Louvain 與 Hierarchical Louvain 社区检测
-- 使用 `gseapy`（本地 GMT 或 Enrichr API）对每个社区进行富集
-- 写出 per-community CSV、合并富集表、汇总（Fisher）及 concordance 评分
-- 生成交互式报告 `results/<edge_stem>/report.html`
+### 示例
 
-## 7) 查看报告（建议用本地静态服务器）
+1.  **运行 SCRIN 数据集并指定小鼠富集**：
+    ```bash
+    python main.py data/scrin/test.csv --dataset scrin --organism mouse
+    ```
 
-浏览器直接打开 `file://.../report.html` 可能因跨域/安全限制导致 fetch 失败，建议在报告目录启动临时 HTTP 服务器：
+2.  **运行 PPI 数据并提供 ID 映射**：
+    ```bash
+    python main.py data/ppi/network.txt --dataset ppi --id-map data/ppi/id_mapping.tsv
+    ```
 
-```bash
-cd results/test
-python -m http.server 8000
-# 在浏览器打开：http://localhost:8000/report.html
-```
+## 输出结果
 
-或在项目根直接指定目录：
+运行完成后，结果将保存在 `results/<文件名>/` 目录下：
 
-```bash
-python -m http.server --directory results/test 8000
-```
+*   **`report.html`**: **[核心]** 交互式 HTML 报告，汇总了所有算法的富集结果和链接。
+*   **`communities_*.csv`**: 各算法生成的社区划分列表。
+*   **`network_*.png`**: 各算法的社区网络可视化图。
+*   **`enrichment_bar_*.png`**: 富集分析结果的前 10 个术语条形图。
+*   **`enrichr_*.csv`**: 详细的富集分析统计表。
+*   **`enrichment_summary_*.csv`**: 富集结果的摘要统计。
+*   **`enrichment_concordance_*.csv`**: 社区与功能术语的一致性评分，包含 **Normalized Score** (归一化一致性得分) 和 **Gene Coverage** (基因覆盖率) 等关键指标。
 
-## 8) 主要输出文件说明
+## 目录结构
 
-- `results/<stem>/communities_louvain.csv` — baseline 社区成员
-- `results/<stem>/communities_hierarchical.csv` — 层级社区成员
-- `results/<stem>/per_community_enrich/baseline/*.csv` — baseline 每社区富集结果
-- `results/<stem>/per_community_enrich/hierarchical/*.csv` — hierarchical 每社区富集结果
-- `results/<stem>/enrichr_baseline.csv`, `enrichr_hierarchical.csv` — 合并富集表
-- `results/<stem>/enrichment_summary_*.csv` — Fisher 合并 p 值汇总
-- `results/<stem>/enrichment_concordance_*.csv` — 算法与基因库一致性指标
-- `results/<stem>/report.html` — 交互式 HTML 报告
-
-## 常见问题
-
-- 如果页面加载 per-community CSV 失败，优先检查是否以 `file://` 打开：请使用 `python -m http.server`。 
-- 若缺少 `gseapy`，请安装：
-
-```bash
-pip install gseapy
-```
-
-- 若需要把报告打包为单文件（内嵌图片与 CSV），或需要自定义前端展示（更多统计图），我可以帮你生成自包含 HTML 或改进前端脚本。
+*   `src/`: 源代码目录。
+    *   `algorithms/`: 包含所有社区检测算法实现。
+*   `data/`: 存放输入数据和 GMT 基因集文件。
+*   `results/`: 存放运行结果。
+*   `config.yaml`: 全局配置文件（路径、预处理参数等）。

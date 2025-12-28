@@ -232,6 +232,70 @@ class Algorithm3:
             pbar.update(1)
         
         pbar.close()
+        
+        # Post-processing: Global Merge of similar communities
+        comm_list = []
+        for cid, members in final_communities.items():
+            comm_list.append(set(members))
+            
+        merged = True
+        while merged:
+            merged = False
+            new_comm_list = []
+            skip_indices = set()
+            
+            for i in range(len(comm_list)):
+                if i in skip_indices: continue
+                
+                current_set = comm_list[i]
+                
+                for j in range(i + 1, len(comm_list)):
+                    if j in skip_indices: continue
+                    
+                    other_set = comm_list[j]
+                    intersection = len(current_set.intersection(other_set))
+                    smaller = min(len(current_set), len(other_set))
+                    
+                    if smaller > 0 and intersection / smaller >= 0.7:
+                        current_set = current_set.union(other_set)
+                        skip_indices.add(j)
+                        merged = True
+                
+                new_comm_list.append(current_set)
+            
+            if merged:
+                comm_list = new_comm_list
+                
+        final_communities = {}
+        all_assigned_nodes = set()
+        for idx, members in enumerate(comm_list):
+            if len(members) < 3: continue
+            final_communities[f"A3_{idx}"] = sorted(list(members))
+            all_assigned_nodes.update(members)
+            
+        # Post-processing: Assign unassigned nodes
+        graph_nodes = set(str(n) for n in self.graph.nodes())
+        unassigned = graph_nodes - all_assigned_nodes
+        
+        if unassigned:
+            adj = {str(n): set(str(nbr) for nbr in self.graph.neighbors(n)) for n in self.graph.nodes()}
+            
+            for node in unassigned:
+                neighbors = adj.get(node, set())
+                best_comm = None
+                max_overlap = 0
+                
+                for cid, members in final_communities.items():
+                    member_set = set(members)
+                    overlap = len(neighbors.intersection(member_set))
+                    if overlap > max_overlap:
+                        max_overlap = overlap
+                        best_comm = cid
+                
+                if best_comm:
+                    final_communities[best_comm].append(node)
+                    final_communities[best_comm].sort()
+
         return final_communities
 
 def run_algorithm3(graph: nx.Graph, k1: float = 1, k2: float = 3) -> Dict[str, List[str]]:

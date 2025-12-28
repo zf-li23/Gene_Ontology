@@ -207,6 +207,7 @@ def main() -> None:
         from src.algorithms.algorithm_div import run_algorithm_div
         from src.algorithms.algorithm2 import run_algorithm2
         from src.algorithms.algorithm3 import run_algorithm3
+        from src.algorithms.algorithm_spectral import run_algorithm_spectral
         
         # Div variants
         div_res = run_algorithm_div(graph)
@@ -219,6 +220,12 @@ def main() -> None:
         
         # Algo 3
         other_results["algorithm3"] = run_algorithm3(graph)
+
+        # Spectral
+        try:
+            other_results["spectral"] = run_algorithm_spectral(graph)
+        except Exception as e:
+            LOGGER.warning(f"Spectral failed: {e}")
         
     except Exception as e:
         LOGGER.warning(f"Failed to run other algorithms: {e}")
@@ -292,7 +299,12 @@ def main() -> None:
                             overall = concord[concord["gene_set"].isna()]
                             if not overall.empty:
                                 row = overall.iloc[0]
-                                print(f"{name} concordance normalized score: {row['normalized_score']:.3f}, frac significant: {row['frac_significant_communities']:.3f}")
+                                # Calculate gene coverage
+                                all_genes_in_comms = set()
+                                for genes in comms.values():
+                                    all_genes_in_comms.update(genes)
+                                coverage = len(all_genes_in_comms) / graph.number_of_nodes() if graph.number_of_nodes() > 0 else 0.0
+                                print(f"{name} concordance normalized score: {row['normalized_score']:.3f}, gene coverage: {coverage:.3f}")
                     except Exception as e:
                         LOGGER.warning(f"Failed summary for {name}: {e}")
                     
