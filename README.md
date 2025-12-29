@@ -109,3 +109,59 @@ python main.py [EDGE_FILE] [OPTIONS]
 *   `data/`: 存放输入数据和 GMT 基因集文件。
 *   `results/`: 存放运行结果。
 *   `config.yaml`: 全局配置文件（路径、预处理参数等）。
+
+## 查看交互式报告（report.html）
+
+生成的 `report.html` 位于某次运行的输出目录 `results/<run_name>/report.html` 中。推荐使用 HTTP 服务器来查看（避免直接用 `file://` 导致某些浏览器安全限制）。
+
+本地查看（在本地机器上）：
+
+```bash
+# 切换到该次运行的结果目录
+cd results/<run_name>
+# 启动一个简单的 HTTP 服务器（Python 3）
+python -m http.server 8000
+# 在浏览器中打开：http://localhost:8000/report.html
+```
+
+远程服务器（在远程无头机上运行并通过端口转发查看）：
+
+方法 A — 使用 SSH 端口转发（推荐）：
+
+```bash
+# 在本地终端建立隧道（将远程 8000 转发到本地 8000）
+ssh -L 8000:localhost:8000 user@remote.host
+# 在远程服务器上（ssh 后）运行：
+cd /path/to/repo/results/<run_name>
+python -m http.server 8000 --bind 127.0.0.1
+# 在本地浏览器打开 http://localhost:8000/report.html
+```
+
+方法 B — 在远程机器上对外绑定（不推荐在不受信任网络上使用）：
+
+```bash
+cd /path/to/repo/results/<run_name>
+# 绑定到 0.0.0.0，允许远程主机直接访问（注意防火墙/安全）
+python -m http.server 8000 --bind 0.0.0.0
+# 然后在本机浏览器打开 http://remote.host:8000/report.html
+```
+
+提示与注意事项：
+- 如果 `report.html` 引用了本地 GMT 文件或其它数据资源，确保这些文件在 `results/<run_name>/` 的相对路径下或使用绝对路径可访问。
+- 在无图形界面的服务器上运行富集（`gseapy`）可能需要网络访问；若无网络，请在 `config.yaml` 中配置本地 GMT 并将 `enable_gseapy` 设置为 `true` 并指定 GMT 路径。
+
+## 常见问题与故障排查
+
+- 如果网页在加载数据时显示空表或图像缺失，检查 `results/<run_name>/per_community_enrich/` 是否包含每个社区对应的 CSV 文件（`<community>_enrich.csv`）。
+- 若出现 `ModuleNotFoundError`（例如 `gseapy`、`community` 等），请确认已按 `requirements.txt` 安装依赖，或使用推荐的 Conda 环境：
+
+```bash
+conda activate genomics
+pip install -r requirements.txt
+```
+
+- 如果谱聚类输出警告 “Graph is not fully connected”，这是因为输入图有多个连通分量；建议在大型或非连通图上采用分量逐个聚类或先进行连通分量分解。
+
+## 联系与支持
+
+如需帮助，请在项目的 issue 中描述重现步骤或将运行日志贴上来，我们会协助定位问题。
